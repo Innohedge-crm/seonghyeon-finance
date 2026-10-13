@@ -393,6 +393,12 @@ VIEWS.reports = () => {
     <div class="row"><label class="f" style="flex-direction:row;align-items:center;gap:6px">발행일 <input type="date" id="r4d" value="${y < thisYear ? `${y + 1}-01-15` : today()}"></label></div>
     <div class="row" style="margin-top:8px"><select id="r4w"><option value="">전체 (${rt.length}명)</option>${rt.map(x => `<option value="${x.d.id}">${esc(x.d.name)} · ${won0(x.total)}</option>`).join('')}</select>
     <button class="btn" data-r="4x">발급명세 Excel</button><button class="btn pri" data-r="4p">영수증 PDF</button></div></div>
+  <div class="panel"><h2>5. 지출 항목별 보고서</h2>
+    <p class="muted">지출예산 항목(순위)별 예산·실적·집행률·잔여 예산, 월별 지출표, 항목별 거래 상세. Excel은 상세 내역이 한 줄 한 건이라 필터·피벗에 바로 쓸 수 있습니다.</p>
+    <div class="row"><select id="r5p"><option value="Y">${y}년 연간</option>${[1, 2, 3, 4].map(q => `<option value="Q${q}">${q}/4분기</option>`).join('')}${Array.from({ length: 12 }, (_, i) => `<option value="M${i + 1}">${i + 1}월</option>`).join('')}</select>
+    <select id="r5a"><option value="">전체 항목</option>${db.accounts.filter(a => a.type === '지출').map(a => `<option value="${esc(a.hang)}">${esc(a.code)}. ${esc(a.hang)}</option>`).join('')}</select></div>
+    <label style="display:flex;gap:8px;margin-top:8px"><input type="checkbox" id="r5d" checked> PDF에 거래 상세 내역 포함</label>
+    <div class="row" style="margin-top:8px"><button class="btn" data-r="5x">Excel</button><button class="btn pri" data-r="5p">PDF</button></div></div>
   </div>
   <p class="hint">기부금영수증 서식은 「소득세법 시행규칙」 별지 제45호의2서식의 항목을 따랐습니다. 코드·근거법령 문구는 설정에서 바꿀 수 있으니, 처음 발급 전 세무서·노회 안내와 한 번 맞춰 보세요.</p>`;
 };
@@ -403,6 +409,8 @@ BIND.reports = () => {
     if (k[0] === '1') { const d = $('#r1d').value; if (!d) return toast('주일 기록이 없습니다'); return k === '1x' ? saveXLSX(`헌금집계_${d}.xlsx`, weeklyXLSX(d, db.settings.showAllDonors)) : savePDF(`헌금집계_${d}.pdf`, weeklyPDF(d, db.settings.showAllDonors), { landscape: true }); }
     if (k[0] === '2') { const q = +$('#r2q').value; return k === '2x' ? saveXLSX(`재정보고_${y}_${q}분기.xlsx`, quarterXLSX(y, q)) : savePDF(`재정보고_${y}_${q}분기.pdf`, quarterPDF(y, q)); }
     if (k[0] === '3') return k === '3x' ? saveXLSX(`예결산서_${y}.xlsx`, annualXLSX(y)) : savePDF(`예결산서_${y}.pdf`, annualPDF(y));
+    if (k[0] === '5') { const per = $('#r5p').value, acc = $('#r5a').value, nm = `지출보고서_${y}_${per === 'Y' ? '연간' : per[0] === 'Q' ? per.slice(1) + '분기' : per.slice(1) + '월'}${acc ? '_' + acc.replace(/[\\/:*?"<>|]/g, '') : ''}`;
+      return k === '5x' ? saveXLSX(nm + '.xlsx', expenseReportXLSX(y, per, acc)) : savePDF(nm + '.pdf', expenseReportPDF(y, per, acc, $('#r5d').checked)); }
     if (k === '4x') return saveXLSX(`기부금영수증_발급명세_${y}.xlsx`, receiptsXLSX(y));
     if (k === '4p') {
       const w = $('#r4w').value, r = receiptsPDF(y, w ? [w] : null, $('#r4d').value || today());

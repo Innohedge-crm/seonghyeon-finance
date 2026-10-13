@@ -254,6 +254,76 @@ function annualXLSX(y) {
   return book([['요약', makeSheet(s, { widths: [16, 15, 15, 15, 15] })], [`${y} 수입`, w2], [`${y} 지출`, w3]]);
 }
 
+/* ======================= 5. 지출 항목별 보고서 ======================= */
+/** per: 'Y' | 'Q1'..'Q4' | 'M1'..'M12' */
+function periodRange(y, per) {
+  if (per[0] === 'Q') return qRange(y, +per.slice(1));
+  if (per[0] === 'M') { const m = +per.slice(1); return [`${y}-${pad(m)}-01`, iso(new Date(y, m, 0))]; }
+  return yearRange(y);
+}
+const periodLabel = (y, per) => per === 'Y' ? `${y}년 연간` : per[0] === 'Q' ? `${y}년 ${per.slice(1)}/4분기` : `${y}년 ${per.slice(1)}월`;
+function expenseReportData(y, per, accHang) {
+  const [from, to] = periodRange(y, per), bud = budgetOf(y);
+  const m1 = +from.slice(5, 7), m2 = +to.slice(5, 7), months = []; for (let m = m1; m <= m2; m++) months.push(m);
+  const inYear = db.expenses.filter(x => yearOf(x.date) === y);
+  const known = db.accounts.filter(a => a.type === '지출');
+  const extra = [...new Set(inYear.map(x => x.acc).filter(h => !known.some(a => a.hang === h)))].map(h => ({ hang: h, code: '', note: '예산 항목에 없음', extra: true }));
+  let accs = [...known, ...extra];
+  if (accHang) accs = accs.filter(a => a.hang === accHang);
+  const rows = accs.map(a => {
+    const all = inYear.filter(x => x.acc === a.hang);
+    const list = all.filter(x => inRange(x.date, from, to)).sort((p, q) => (p.time || p.date).localeCompare(q.time || q.date));
+    const ytd = all.filter(x => x.date <= to).reduce((s, x) => s + x.amount, 0);
+    const mon = months.map(m => list.filter(x => +x.date.slice(5, 7) === m).reduce((s, x) => s + x.amount, 0));
+    return { a, bud: bud[a.hang] || 0, per: list.reduce((s, x) => s + x.amount, 0), ytd, mon, list };
+  });
+  const T = k => rows.reduce((s, r) => s + r[k], 0);
+  return { y, per, from, to, months, rows, tot: { bud: T('bud'), per: T('per'), ytd: T('ytd'), mon: months.map((_, i) => rows.reduce((s, r) => s + r.mon[i], 0)) } };
+}
+function expenseReportPDF(y, per, accHang, withDetail) {
+  const D = expenseReportData(y, per, accHang), ch = db.settings.church;
+  const rows = D.rows.filter(r => r.bud || r.per || r.ytd || accHang);
+  const rem = r => r.bud ? r.bud - r.ytd : 0;
+  const sum = `<h1>지출 항목별 보고서</h1><p class="sub">${periodLabel(y, per)} · ${dotDate(D.from)} ~ ${dotDate(D.to)} · ${esc(ch.name)}${accHang ? ` · ${esc(accHang)}` : ''}</p>
+  <table style="font-size:8.5pt"><tr><th style="width:11mm">순위</th><th>항 목</th><th>연 예산</th><th>${per === 'Y' ? '연간 실적' : '기간 실적'}</th>${per === 'Y' ? '' : '<th>연 누계</th>'}<th style="width:15mm">집행률</th><th>잔여 예산</th><th style="width:12mm">건수</th><th>비 고</th></tr>
+  ${rows.map(r => `<tr><td class="c">${esc(r.a.code)}</td><td>${esc(r.a.hang)}</td>${n(r.bud)}${n(r.per)}${per === 'Y' ? '' : n(r.ytd)}<td class="n">${rateTxt(r.ytd, r.bud)}</td><td class="n" style="${rem(r) < 0 ? 'color:#b42318' : ''}">${won(rem(r))}</td><td class="c">${r.list.length || ''}</td><td style="font-size:8pt">${esc(r.a.note || '')}</td></tr>`).join('')}
+  <tr class="tot"><td colspan="2" class="c">합 계</td>${n(D.tot.bud)}${n(D.tot.per)}${per === 'Y' ? '' : n(D.tot.ytd)}<td class="n">${rateTxt(D.tot.ytd, D.tot.bud)}</td>${n(D.tot.bud - D.tot.ytd)}<td class="c">${rows.reduce((s, r) => s + r.list.length, 0)}</td><td></td></tr></table>
+  <p class="note">※ 집행률·잔여 예산은 ${y}년 1월 1일부터 ${dotDate(D.to)}까지 누계 기준. 날짜는 총입출금의 주(Month) 기준.</p>`;
+  const monthly = D.months.length > 1 ? `<div class="page wide"><h2>월별 지출</h2>
+  <table style="font-size:7.5pt"><tr><th style="width:10mm">순위</th><th>항 목</th>${D.months.map(m => `<th>${m}월</th>`).join('')}<th>합계</th></tr>
+  ${rows.filter(r => r.per).map(r => `<tr><td class="c">${esc(r.a.code)}</td><td style="white-space:nowrap">${esc(r.a.hang)}</td>${r.mon.map(v => nb(v)).join('')}${n(r.per)}</tr>`).join('')}
+  <tr class="tot"><td colspan="2" class="c">합 계</td>${D.tot.mon.map(v => n(v)).join('')}${n(D.tot.per)}</tr></table></div>` : '';
+  const detail = withDetail ? `<div class="page"><h2>항목별 상세 내역</h2>${rows.filter(r => r.list.length).map(r => `
+  <h3 style="font-size:10.5pt;margin:5mm 0 1.5mm">${esc(r.a.code ? r.a.code + '. ' : '')}${esc(r.a.hang)} <span style="font-weight:400;color:#555">— ${r.list.length}건 · ${won0(r.per)}원${r.bud ? ` · 예산 ${won0(r.bud)}` : ''}</span></h3>
+  <table style="font-size:8.5pt;page-break-inside:auto"><tr><th style="width:20mm">주(Month)</th><th style="width:30mm">거래일시</th><th>내용</th><th style="width:26mm">금액</th><th style="width:18mm">증빙</th></tr>
+  ${r.list.map(x => `<tr><td class="c">${x.date.slice(5).replace('-', '.')}</td><td class="c">${esc((x.time || '').slice(5, 16).replace('-', '.'))}</td><td>${esc(x.memo || '')}${x.payee ? ' · ' + esc(x.payee) : ''}</td>${n(x.amount)}<td class="c">${esc(x.proof || '')}</td></tr>`).join('')}
+  <tr class="sub"><td colspan="3" class="c">소 계</td>${n(r.per)}<td></td></tr></table>`).join('')}</div>` : '';
+  const body = `<div class="page">${sum}<div class="sign"><span>재정부장 : ${esc(ch.treasurer || '')}</span><span>(인)</span></div></div>${monthly}${detail}`;
+  return docHTML(`지출 항목별 보고서 ${periodLabel(y, per)}`, body, { fs: 10, cellPad: '1.5px 5px', margin: '10mm 12mm', css: '@page wide{size:A4 landscape;margin:10mm 12mm} .wide{page:wide}' });
+}
+function expenseReportXLSX(y, per, accHang) {
+  const D = expenseReportData(y, per, accHang);
+  const rows = D.rows.filter(r => r.bud || r.per || r.ytd || accHang);
+  // 1) 요약 — 집행률·잔여는 수식
+  const s1 = [[`지출 항목별 보고서 · ${periodLabel(y, per)} (${dotDate(D.from)} ~ ${dotDate(D.to)})`], [],
+    ['순위', '항 목', '연 예산', '기간 실적', '연 누계', '집행률', '잔여 예산', '건수', '비 고']];
+  rows.forEach((r, i) => { const R = i + 4; s1.push([+r.a.code || r.a.code, r.a.hang, r.bud || null, r.per || null, r.ytd || null, { f: `IF(C${R}=0,"",E${R}/C${R})`, z: '0.0%' }, { f: `IF(C${R}=0,"",C${R}-E${R})` }, r.list.length || null, r.a.note || '']); });
+  const L = rows.length + 3;
+  s1.push(['합 계', '', { f: `SUM(C4:C${L})` }, { f: `SUM(D4:D${L})` }, { f: `SUM(E4:E${L})` }, { f: `IF(C${L + 1}=0,"",E${L + 1}/C${L + 1})`, z: '0.0%' }, { f: `C${L + 1}-E${L + 1}` }, { f: `SUM(H4:H${L})`, z: '0' }, '']);
+  const w1 = makeSheet(s1, { widths: [6, 22, 14, 14, 14, 9, 14, 6, 26], plainCols: [0, 7], merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 8 } }] });
+  // 2) 월별
+  const s2 = [['순위', '항 목', ...D.months.map(m => `${m}월`), '합계']];
+  rows.forEach((r, i) => s2.push([+r.a.code || r.a.code, r.a.hang, ...r.mon.map(v => v || null), { f: `SUM(C${i + 2}:${CL(1 + D.months.length)}${i + 2})` }]));
+  s2.push(['합 계', '', ...D.months.map((_, j) => ({ f: `SUM(${CL(2 + j)}2:${CL(2 + j)}${rows.length + 1})` })), { f: `SUM(${CL(2 + D.months.length)}2:${CL(2 + D.months.length)}${rows.length + 1})` }]);
+  const w2 = makeSheet(s2, { widths: [6, 22, ...D.months.map(() => 12), 14], plainCols: [0] });
+  // 3) 상세 — 한 줄에 한 건 (필터·피벗용)
+  const det = rows.flatMap(r => r.list.map(x => [+r.a.code || r.a.code, r.a.hang, x.date, x.time || '', x.memo || '', x.payee || '', x.amount, x.proof || '', x.approve || '']));
+  const s3 = [['순위', '지출계정과목', '주(Month)', '거래일시', '내용', '지급처', '금액', '증빙', '결재'], ...det, ['합계', '', '', '', '', '', { f: `SUM(G2:G${det.length + 1})` }]];
+  const w3 = makeSheet(s3, { widths: [6, 20, 12, 18, 34, 14, 13, 10, 14], plainCols: [0] });
+  w3['!autofilter'] = { ref: `A1:I${det.length + 1}` };
+  return book([['항목별 요약', w1], ...(D.months.length > 1 ? [['월별', w2]] : []), ['상세 내역', w3]]);
+}
+
 /* ======================= 4. 기부금영수증 ======================= */
 function donorYear(y, donorId) {
   const m = Array(12).fill(0);
