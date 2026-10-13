@@ -99,6 +99,20 @@ function logAct(text) { db.log.unshift({ t: now(), text }); db.log.length = Math
 /* ---------- 조회 ---------- */
 const cols = () => db.settings.offeringCols;
 const donorById = id => db.donors.find(d => d.id === id);
+/** 이름 검색: '김명', 'ㄱㅁ', '김ㅁ'처럼 초성으로도 찾기 */
+const CHO = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ';
+const choOf = ch => { const c = ch.charCodeAt(0) - 0xAC00; return c >= 0 && c < 11172 ? CHO[Math.floor(c / 588)] : ch; };
+function nameMatch(name, q) {
+  const n = String(name).replace(/\s/g, ''), k = String(q).replace(/\s/g, '');
+  if (!k) return true;
+  if (n.includes(k)) return true;
+  for (let i = 0; i + k.length <= n.length; i++) {
+    let ok = true;
+    for (let j = 0; j < k.length && ok; j++) { const a = n[i + j], b = k[j]; ok = a === b || (CHO.includes(b) && choOf(a) === b); }
+    if (ok) return true;
+  }
+  return false;
+}
 const normName = s => String(s || '').replace(/\s+/g, ' ').trim();
 const donorByName = n => { const k = normName(n).replace(/\s/g, ''); return db.donors.find(d => d.name.replace(/\s/g, '') === k); };
 const activeDonors = () => db.donors.filter(d => !d.inactive).sort((a, b) => (a.anon - b.anon) || (a.no - b.no) || a.name.localeCompare(b.name, 'ko'));

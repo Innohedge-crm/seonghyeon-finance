@@ -417,14 +417,14 @@ BIND.reports = () => {
 VIEWS.donors = () => {
   const q = S.dq.trim();
   const y = S.year;
-  const list = db.donors.filter(d => !q || d.name.includes(q)).sort((a, b) => (a.anon - b.anon) || (!!a.inactive - !!b.inactive) || (a.no - b.no));
+  const list = db.donors.slice().sort((a, b) => (a.anon - b.anon) || (!!a.inactive - !!b.inactive) || (a.no - b.no));
   const tot = id => db.offerings.filter(o => o.donorId === id && yearOf(o.date) === y).reduce((s, o) => s + rowTotal(o), 0);
   const cnt = id => new Set(db.offerings.filter(o => o.donorId === id && yearOf(o.date) === y).map(o => o.date)).size;
   return `<div class="head"><div><h1>헌금자 명단</h1><p>${db.donors.filter(d => !d.anon && !d.inactive).length}명 (무명 제외) · 주소·주민번호는 기부금영수증에만 쓰이고 이 PC에만 저장됩니다</p></div>
   <div class="row"><button class="btn" id="roll">출석부 교인명단 가져오기</button><button class="btn pri" id="addd">+ 헌금자</button></div></div>
   <div class="toolbar"><input type="search" id="dq" placeholder="이름 검색" value="${esc(q)}">${yearSel('dy', y)}<span class="hint">번호 순서가 주간 집계표 순서입니다.</span></div>
   <div class="tbl-wrap"><table><thead><tr><th class="num">번호</th><th>이름</th><th>직분</th><th>연락처</th><th>주소</th><th>주민번호</th><th class="num">${y} 주일수</th><th class="num">${y} 합계</th><th></th></tr></thead><tbody>
-  ${list.map(d => `<tr class="click" data-id="${d.id}"><td class="num">${d.anon ? '' : d.no}</td><td><b>${esc(d.name)}</b>${d.inactive ? ' <span class="pill">숨김</span>' : ''}</td><td>${esc(d.title || '')}</td><td>${esc(d.phone || '')}</td><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis">${esc(d.address || '')}</td><td>${d.rrn ? esc(String(d.rrn).slice(0, 8)) + '******' : ''}</td><td class="num">${cnt(d.id) || ''}</td><td class="num">${won(tot(d.id))}</td><td></td></tr>`).join('')}
+  ${list.map(d => `<tr class="click" data-id="${d.id}" data-nm="${esc(d.name)}" ${q && !nameMatch(d.name, q) ? 'hidden' : ''}><td class="num">${d.anon ? '' : d.no}</td><td><b>${esc(d.name)}</b>${d.inactive ? ' <span class="pill">숨김</span>' : ''}</td><td>${esc(d.title || '')}</td><td>${esc(d.phone || '')}</td><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis">${esc(d.address || '')}</td><td>${d.rrn ? esc(String(d.rrn).slice(0, 8)) + '******' : ''}</td><td class="num">${cnt(d.id) || ''}</td><td class="num">${won(tot(d.id))}</td><td></td></tr>`).join('')}
   </tbody></table></div>`;
 };
 function donorForm(d) {
@@ -475,7 +475,8 @@ function donorForm(d) {
   };
 }
 BIND.donors = () => {
-  const dq = $('#dq'); dq.oninput = () => { S.dq = dq.value; const p = dq.selectionStart; render(); const n = $('#dq'); n.focus(); n.setSelectionRange(p, p); };
+  // 화면을 다시 그리지 않고 줄만 숨김 — 한글 조합 중 입력창이 바뀌면 'ㄱㄱ'처럼 글자가 겹쳐 들어감
+  const dq = $('#dq'); dq.oninput = () => { S.dq = dq.value; const q = dq.value.trim(); $$('tr[data-nm]').forEach(tr => { tr.hidden = !!q && !nameMatch(tr.dataset.nm, q); }); };
   $('#dy').onchange = e => go('donors', { year: +e.target.value });
   $('#addd').onclick = () => donorForm();
   $$('tr[data-id]').forEach(tr => tr.onclick = () => donorForm(donorById(tr.dataset.id)));
