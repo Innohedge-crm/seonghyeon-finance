@@ -55,7 +55,7 @@ VIEWS.home = () => {
     <div class="kpi"><span>수입 누계</span><b class="inc">${won0(T.inc)}</b><small>예산 ${won0(budInc)} · ${budInc ? pct(T.inc, budInc) + '%' : '예산 없음'}</small></div>
     <div class="kpi"><span>지출 누계</span><b class="exp">${won0(T.exp)}</b><small>예산 ${won0(budExp)} · ${budExp ? pct(T.exp, budExp) + '%' : '예산 없음'}</small></div>
     <div class="kpi"><span>장부 잔액</span><b>${won0(bal)}</b><small>전년 이월 ${won0(T.carry)} + 수입 − 지출</small></div>
-    <div class="kpi"><span>통장 잔액</span><b>${db.bank ? won0(db.bank.balance) : '-'}</b><small>${db.bank ? `${esc(db.bank.time.slice(0, 10))} 기준 · 장부와 ${won0(bal - db.bank.balance)} 차이` : '총입출금을 올리면 표시'}</small></div>
+    <div class="kpi"><span>통장 잔액</span><b>${db.bank ? won0(db.bank.balance) : '-'}</b><small>${db.bank ? (() => { const R = reconData(); return `${esc(db.bank.time.slice(0, 10))} 기준 · 장부와 ${won0(R.diff)} 차이 <button class="btn link" id="recon">내역</button>`; })() : '총입출금을 올리면 표시'}</small></div>
   </div>
   <div class="grid2">
     <div class="panel"><h2>주일 헌금 (최근 ${wk.length}주, 오프라인+온라인)</h2>
@@ -80,6 +80,7 @@ VIEWS.home = () => {
   </div>`;
 };
 BIND.home = () => {
+  if ($('#recon')) $('#recon').onclick = () => reconDialog();
   $('#hy').onchange = e => go('home', { year: +e.target.value });
   $$('[data-go2]').forEach(b => b.onclick = () => go(b.dataset.go2));
   $$('[data-wk]').forEach(b => b.onclick = () => go('week', { date: b.dataset.wk }));
@@ -188,13 +189,41 @@ VIEWS.weeks = () => {
   const S2 = k => rows.reduce((s, r) => s + r[k], 0);
   const dcell = r => !(r.dep || r.cx) ? '<td class="num"></td>' : `<td class="num ${r.diff ? 'exp' : 'muted'}"><span class="click" data-cxw="${r.d}" title="이 주 지출 보기 · 현금 표시">${r.diff ? won0(r.diff) : '일치'}</span></td>`;
   return `<div class="head"><div><h1>주일별 헌금</h1><p>${y}년 · ${ds.length}주 · 오프라인 ${won0(S2('off'))} · 온라인 ${won0(S2('on'))} · 합계 ${won0(S2('off') + S2('on'))}원</p></div>
-  <div class="row">${yearSel('wy', y)}<button class="btn" id="wx">연간 Excel</button><button class="btn pri" data-go2="week">새 주일 입력</button></div></div>
-  <p class="hint" style="margin-top:-8px">‘현금입금’은 총입출금의 현금입금 칸(통장에 넣은 금액), ‘현금지출’은 증빙이 <b>현금</b>인 지출(받은 현금에서 바로 쓴 돈)입니다. 차이 = 오프라인 − 현금입금 − 현금지출. 차이 칸을 누르면 그 주 지출을 보고 현금으로 표시할 수 있습니다. ‘온라인’은 기부금영수증 대상 헌금만, ‘기타입금’은 그 밖의 통장 입금(주차·회비·찬조·이자·종류 빈칸) — 온라인 금액을 누르면 그 주 통장 입금 전체를 한 건씩 대조할 수 있습니다.</p>
+  <div class="row">${yearSel('wy', y)}${db.bank ? '<button class="btn" id="wrc">장부·통장 대조</button>' : ''}<button class="btn" id="wx">연간 Excel</button><button class="btn pri" data-go2="week">새 주일 입력</button></div></div>
+  <p class="hint" style="margin-top:-8px">‘현금입금’은 총입출금의 현금입금 칸(통장에 넣은 금액), ‘현금지출’은 받은 현금에서 바로 쓴 돈 — 증빙이 <b>현금</b>이거나 <b>거래일시 없는</b> 지출(통장에서 나간 기록이 아님)입니다. 차이 = 오프라인 − 현금입금 − 현금지출. 차이 칸을 누르면 그 주 지출을 보고 현금으로 표시할 수 있습니다. ‘온라인’은 기부금영수증 대상 헌금만, ‘기타입금’은 그 밖의 통장 입금(주차·회비·찬조·이자·종류 빈칸) — 온라인 금액을 누르면 그 주 통장 입금 전체를 한 건씩 대조할 수 있습니다.</p>
   <div class="tbl-wrap"><table><thead><tr><th>주일</th><th class="num">오프라인</th><th class="num">인원</th><th class="num">현금입금(통장)</th><th class="num">현금지출</th><th class="num">차이</th><th class="num">온라인</th><th class="num">인원</th><th class="num">합계</th><th class="num" title="온라인 헌금 외 통장 입금(주차·회비·찬조·이자·종류 빈칸 등) — 헌금 합계에는 들어가지 않음">기타입금</th></tr></thead><tbody>
   ${rows.map(r => `<tr class="click" data-wk="${r.d}"><td>${dotDate(r.d)}</td><td class="num">${won(r.off)}</td><td class="num muted">${r.nOff || ''}</td><td class="num">${won(r.dep)}</td><td class="num">${r.cx ? `<span class="click" data-cxw="${r.d}">${won0(r.cx)}</span>` : ''}</td>${dcell(r)}<td class="num">${r.on || r.oi ? `<span class="click" data-onw="${r.d}" title="이 주 통장 입금 내역">${won0(r.on)}</span>` : ''}</td><td class="num muted">${r.nOn || ''}</td><td class="num"><b>${won0(r.off + r.on)}</b></td><td class="num muted">${r.oi ? `<span class="click" data-onw="${r.d}">${won0(r.oi)}</span>${r.nk ? ' <span class="pill bad" title="헌금종류 빈칸">미분류</span>' : ''}` : ''}</td></tr>`).join('') || `<tr><td colspan="10" class="empty">기록 없음</td></tr>`}
   ${rows.length ? `<tr class="tot"><td>합계</td><td class="num">${won0(S2('off'))}</td><td></td><td class="num">${won0(S2('dep'))}</td><td class="num">${won0(S2('cx'))}</td><td class="num">${won0(S2('diff'))}</td><td class="num">${won0(S2('on'))}</td><td></td><td class="num">${won0(S2('off') + S2('on'))}</td><td class="num">${won0(S2('oi'))}</td></tr>` : ''}
   </tbody></table></div>`;
 };
+/** 장부 잔액 − 통장 잔액 차이 풀이 */
+function reconDialog() {
+  const R = reconData(); if (!R) return toast('총입출금을 먼저 올리세요');
+  const sg = v => v > 0 ? '+' + won0(v) : won0(v);
+  const d = modal(`<h2>장부·통장 대조 — ${dotDate(R.cut)} 주까지</h2>
+  <table><tbody>
+  <tr><td>장부 잔액 <span class="muted">(이월 + 수입 − 지출, ${dotDate(R.cut)} 주까지)</span></td><td class="num">${won0(R.book)}</td></tr>
+  <tr><td>통장 잔액 <span class="muted">(${esc(R.time)} 거래후 잔액)</span></td><td class="num">${won0(R.bank)}</td></tr>
+  <tr class="tot"><td>차이 (장부 − 통장)</td><td class="num">${sg(R.diff)}</td></tr>
+  <tr><td>① 손에 있는 현금 <span class="muted">— 오프라인 헌금 − 현금입금 − 현금지출 (아래 주별)</span></td><td class="num">${sg(R.cash)}</td></tr>
+  <tr><td>② 통장 잔액이 끊긴 곳 <span class="muted">— 총입출금에 빠졌거나 금액이 다른 통장 거래 (거래일시 빈 ‘온라인’ 줄 반영)</span></td><td class="num">${R.checks ? sg(R.chain) : '<span class="muted">총입출금 다시 올리면 검사</span>'}</td></tr>
+  <tr><td>③ 전년 이월금 − 첫 거래 전 통장 잔액</td><td class="num">${R.hasOpen ? sg(R.open) : '<span class="muted">-</span>'}</td></tr>
+  <tr class="tot"><td>④ 설명 안 되는 차이</td><td class="num ${R.rest ? 'exp' : ''}">${R.rest ? sg(R.rest) : '0 ✓'}</td></tr>
+  </tbody></table>
+  <div style="margin-top:10px">
+  ${R.weeks.length ? `<h3 style="margin:8px 0 4px">① 현금이 남거나 모자란 주 <span class="muted" style="font-weight:400">— 누르면 그 주 지출에서 현금지출을 고를 수 있습니다</span></h3>
+  <table><thead><tr><th>주일</th><th class="num">오프라인</th><th class="num">현금입금</th><th class="num">현금지출</th><th class="num">남은 현금</th></tr></thead><tbody>
+  ${R.weeks.map(o => `<tr class="click" data-rw="${o.d}"><td>${dotDate(o.d)}</td><td class="num">${won(o.off + o.ci)}</td><td class="num">${won(o.dep)}</td><td class="num">${won(o.cx)}</td><td class="num ${o.r < 0 ? 'exp' : ''}">${sg(o.r)}</td></tr>`).join('')}</tbody></table>
+  <p class="hint">+ 는 받았는데 통장에 안 넣은 현금(또는 현금지출 미기록), − 는 받은 것보다 더 넣거나 쓴 경우(다른 주 현금, 오프라인 헌금 누락).</p>` : ''}
+  ${R.checks && R.checks.length ? `<h3 style="margin:12px 0 4px">② 통장 잔액이 끊긴 곳 <span class="muted" style="font-weight:400">— 엑셀 행 번호 바로 위쪽을 은행 거래내역과 비교</span></h3>
+  <table><thead><tr><th>엑셀 행</th><th>거래일시</th><th>내용</th><th class="num">통장 − 계산</th><th>의심</th></tr></thead><tbody>
+  ${R.checks.map(c => `<tr><td>${c.row}</td><td class="muted">${esc(c.time.slice(5, 16).replace('-', '.'))}</td><td>${esc(c.memo)}</td><td class="num">${sg(c.gap)}</td><td>${c.by ? `<span class="pill">설명됨</span> ${c.by.row}행 ‘${esc(c.by.memo)}’ 거래일시 빈칸 — 거래일시를 넣으면 사라짐` : c.gap > 0 ? `입금 ${won0(c.gap)}원 빠짐 (또는 출금 과다 기록)` : `출금 ${won0(-c.gap)}원 빠짐 (또는 입금 중복·과다 기록)`}</td></tr>`).join('')}</tbody></table>` : ''}
+  ${R.noTime.filter(x => !x.hit).length ? `<p class="hint">거래일시 빈 ‘온라인’ 줄: ${R.noTime.filter(x => !x.hit).map(x => `${x.row}행 ${esc(x.memo)} ${won0(x.d)}`).join(', ')}</p>` : ''}
+  </div>
+  <div class="acts"><button class="btn pri" data-x>닫기</button></div>`, { wide: true });
+  d.querySelector('[data-x]').onclick = closeModal;
+  $$('[data-rw]', d).forEach(b => b.onclick = () => { closeModal(); cashExpDialog(b.dataset.rw, () => { go(S.view); reconDialog(); }); });
+}
 /** 그 주 통장 입금 전체 — 온라인 헌금(이름·종류) + 기타입금(계정), 거래일시 순 */
 function onlineDialog(date) {
   const L = [];
@@ -222,9 +251,9 @@ function cashExpDialog(date, after) {
   const L = db.expenses.filter(x => x.date === date || (!isSunday(x.date) && lastSunday(x.date) === date)).sort((a, b) => (a.time || a.date).localeCompare(b.time || b.date));
   const off = offeringsOn(date, 'off').reduce((s, o) => s + rowTotal(o), 0), dep = depositSum(date);
   const d = modal(`<h2>${korDate(date)} 주 지출 — 현금지출 표시</h2>
-  <p class="muted">오프라인 ${won0(off)} − 현금입금 ${won0(dep)} = <b>${won0(off - dep)}</b>원. 받은 현금에서 바로 쓴 지출을 체크하면 증빙이 ‘현금’으로 바뀝니다.</p>
+  <p class="muted">오프라인 ${won0(off)} − 현금입금 ${won0(dep)} = <b>${won0(off - dep)}</b>원. 받은 현금에서 바로 쓴 지출을 체크하세요(증빙이 ‘현금’으로 바뀜). 거래일시 없는 지출은 처음부터 체크되어 있고, 통장에서 나간 것이면 체크를 풉니다.</p>
   <div class="tbl-wrap" style="max-height:50vh"><table><thead><tr><th>현금</th><th>거래일시</th><th>계정</th><th class="num">금액</th><th>내용</th><th>지금 증빙</th></tr></thead><tbody>
-  ${L.map(x => `<tr><td><input type="checkbox" data-cid="${x.id}" ${x.proof === '현금' ? 'checked' : ''}></td><td class="muted">${esc((x.time || '').slice(5, 16).replace('-', '.')) || dotDate(x.date)}</td><td>${esc(x.acc)}</td><td class="num">${won0(x.amount)}</td><td>${esc(x.memo || '')}${x.payee ? ' · ' + esc(x.payee) : ''}</td><td>${x.proof ? `<span class="pill">${esc(x.proof)}</span>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">이 주 지출 기록 없음</td></tr>'}
+  ${L.map(x => `<tr><td><input type="checkbox" data-cid="${x.id}" ${isCashExp(x) ? 'checked' : ''}></td><td class="muted">${esc((x.time || '').slice(5, 16).replace('-', '.')) || dotDate(x.date)}</td><td>${esc(x.acc)}</td><td class="num">${won0(x.amount)}</td><td>${esc(x.memo || '')}${x.payee ? ' · ' + esc(x.payee) : ''}</td><td>${x.proof ? `<span class="pill">${esc(x.proof)}</span>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">이 주 지출 기록 없음</td></tr>'}
   </tbody></table></div>
   <p id="cxsum" style="margin-top:10px"></p>
   <div class="acts"><button class="btn" data-x>취소</button><button class="btn pri" data-ok>저장</button></div>`);
@@ -234,15 +263,17 @@ function cashExpDialog(date, after) {
   d.querySelector('[data-x]').onclick = closeModal;
   d.querySelector('[data-ok]').onclick = () => {
     let n = 0;
-    L.forEach(x => { const on = $(`[data-cid="${x.id}"]`, d).checked;
-      if (on && x.proof !== '현금') { x.proof0 = x.proof || ''; x.proof = '현금'; x.t = now(); n++; }
-      else if (!on && x.proof === '현금') { x.proof = x.proof0 || '기타'; delete x.proof0; x.t = now(); n++; } });
+    L.forEach(x => { const on = $(`[data-cid="${x.id}"]`, d).checked; if (on === isCashExp(x)) return;
+      if (on) { x.cash = true; if (x.proof !== '현금') { x.proof0 = x.proof || ''; x.proof = '현금'; } }
+      else { x.cash = false; if (x.proof === '현금') { x.proof = x.proof0 || '기타'; delete x.proof0; } }
+      x.t = now(); n++; });
     save(); closeModal(); toast(n ? `${n}건 증빙 변경` : '변경 없음'); after && after();
   };
 }
 BIND.weeks = () => {
   $('#wy').onchange = e => go('weeks', { year: +e.target.value });
   $$('[data-wk]').forEach(b => b.onclick = () => go('week', { date: b.dataset.wk }));
+  if ($('#wrc')) $('#wrc').onclick = () => reconDialog();
   $$('[data-onw]').forEach(b => b.onclick = e => { e.stopPropagation(); onlineDialog(b.dataset.onw); });
   $$('[data-cxw]').forEach(b => b.onclick = e => { e.stopPropagation(); cashExpDialog(b.dataset.cxw, () => go('weeks')); });
   $$('[data-go2]').forEach(b => b.onclick = () => go(b.dataset.go2, { date: lastSunday() }));

@@ -194,7 +194,7 @@ function parseLedger(rows, hi, sn, out) {
   for (const r of body) if (r[C.memo] && parseAmt(r[C.in]) && (String(r[C.ch] || '').trim() === '오프라인' || (!ymdTime(r[C.t]).t && String(r[C.ch] || '').trim() !== '온라인'))) known.add(String(r[C.memo]).replace(/\s/g, ''));
   known.delete('무명');
   const off = [], counts = { off: 0, on: 0, inc: 0, exp: 0, dep: 0, nokind: 0 };
-  let lastBal = null; const seen = new Map();
+  let lastBal = null; const seen = new Map(), chain = [], noTime = [];
   body.forEach((r, i) => {
     const memo = r[C.memo] == null ? '' : String(r[C.memo]).trim();
     const { d: td, t: time } = ymdTime(r[C.t]);
@@ -203,14 +203,17 @@ function parseLedger(rows, hi, sn, out) {
     const outAmt = parseAmt(r[C.out]), inAmt = parseAmt(r[C.in]), cash = C.cash >= 0 && typeof r[C.cash] === 'number' ? r[C.cash] : 0;
     const kind = normKind(C.kind >= 0 ? r[C.kind] : '');
     const ch = C.ch >= 0 ? String(r[C.ch] || '').trim() : '';
-    if (C.bal >= 0 && typeof r[C.bal] === 'number' && time) lastBal = { balance: r[C.bal], time };
+    if (C.bal >= 0 && typeof r[C.bal] === 'number' && time) lastBal = { balance: r[C.bal], time, week: wk || td };
+    // 통장 거래(거래일시 있고 오프라인 아님) — 잔액 이어짐 검사용
+    if (!time && ch === '온라인' && (parseAmt(r[C.in]) || parseAmt(r[C.out]) || cash)) noTime.push({ row: hi + i + 2, date, memo, d: parseAmt(r[C.in]) + cash - parseAmt(r[C.out]) });
+    if (time && ch !== '오프라인') chain.push({ row: hi + i + 2, time, memo, d: parseAmt(r[C.in]) + cash - parseAmt(r[C.out]), bal: C.bal >= 0 && typeof r[C.bal] === 'number' ? r[C.bal] : null });
     if (!date && (outAmt || inAmt || cash)) { out.warn.push(`${sn} ${hi + i + 2}행: 날짜(Month)가 없어 건너뜀 — ${memo}`); return; }
     let key = time ? [time, memo, outAmt, inAmt, cash].join('|') : '';
     if (key) { const n = (seen.get(key) || 0) + 1; seen.set(key, n); if (n > 1) key += '#' + n; }   // 같은 시각·같은 내용 거래가 여러 건이면 순번
     if (cash) { out.deposits.push({ date, amount: cash, memo, key: key || [date, memo, cash].join('|') }); counts.dep++; }
     if (outAmt) {
       const acc = String(C.acc >= 0 ? r[C.acc] || '' : '').trim();
-      out.expenses.push({ date, time, acc: acc || '(계정 없음)', amount: outAmt, payee: '', memo, proof: '', approve: '', key }); counts.exp++;
+      out.expenses.push({ date, time, acc: acc || '(계정 없음)', amount: outAmt, payee: '', memo, proof: '', approve: '', key, via: time || ch === '온라인' ? 'bank' : 'cash' }); counts.exp++;
     }
     if (!inAmt) return;
     const a = accOfKind(kind);
@@ -231,6 +234,18 @@ function parseLedger(rows, hi, sn, out) {
   });
   out.offerings.push(...off);
   if (lastBal) out.bank = lastBal;
+  // 통장 잔액 이어짐 검사: 앞 잔액 + 입금 − 출금 = 이 줄 잔액 (잔액 빈 줄은 계산으로 이어감)
+  chain.sort((a, b) => a.time.localeCompare(b.time) || a.row - b.row);
+  const first = chain.find(x => x.bal !== null);
+  if (first && out.bank) {
+    const fi = chain.indexOf(first), checks = [];
+    let run = first.bal;
+    for (const x of chain.slice(fi + 1)) { run += x.d; if (x.bal !== null) { const gap = x.bal - run; if (Math.abs(gap) > 0.5) checks.push({ row: x.row, time: x.time, memo: x.memo, gap }); run = x.bal; } }
+    out.bank.open = first.bal - first.d - chain.slice(0, fi).reduce((s, x) => s + x.d, 0);   // 첫 거래 전 통장 잔액
+    out.bank.checks = checks; out.bank.noTime = noTime;
+    if (noTime.length) out.warn.push(`비고 '온라인'인데 거래일시가 빈 줄 ${noTime.length}건: ${noTime.map(x => `${x.row}행 ${x.memo} ${won0(x.d)}`).join(', ')} — 통장 거래라면 거래일시를 넣어 주세요.`);
+    if (checks.length) out.warn.push(`통장 잔액이 이어지지 않는 곳 ${checks.length}군데 (총입출금에 빠지거나 금액이 다른 거래 의심): ${checks.map(c => `${c.row}행 ${c.time.slice(5, 10)} ${won0(c.gap)}원`).join(', ')}`);
+  }
   out.sheets.push(`${sn}: 오프라인 헌금 ${counts.off} · 온라인 헌금 ${counts.on} · 기타수입 ${counts.inc} · 지출 ${counts.exp} · 현금입금 ${counts.dep}`);
   if (counts.nokind) out.warn.push(`헌금종류가 빈 입금 ${counts.nokind}건 — '미분류'로 들어갑니다. 지출·기타수입 화면에서 계정을 정해 주세요.`);
   const accNames = new Set(db.accounts.filter(a => a.type === '지출').map(a => a.hang));
@@ -402,11 +417,11 @@ function applyImport(P, dates, opt = {}) {
   for (const d of db.donors.slice(before)) if (GROUP_NAME.test(d.name)) d.group = true;
   // 기타수입·지출·현금입금: 새 거래는 추가, 일시·금액이 같고 내용·계정만 고친 거래는 그 자리에서 고침
   const merge = (list, src, field, extra) => {
-    const full = new Set(list.map(keyOf)), loose = new Map(); for (const x of list) { const lk = looseKey(keyOf(x)); if (lk) loose.set(lk, x); }
+    const full = new Set(list.map(keyOf)), byKey = new Map(list.map(x => [keyOf(x), x])), loose = new Map(); for (const x of list) { const lk = looseKey(keyOf(x)); if (lk) loose.set(lk, x); }
     for (const x of src) {
-      const k = keyOf(x); if (full.has(k)) continue;
+      const k = keyOf(x); if (full.has(k)) { const e = byKey.get(k); if (e && x.via && e.via == null) e.via = x.via; continue; }   // 예전 기록에 통장/현금 구분 채움
       const hit = looseKey(k) && loose.get(looseKey(k));
-      if (hit) { const keep = { id: hit.id, proof: hit.proof, approve: hit.approve, payee: hit.payee }; Object.assign(hit, x, { key: k, t: now() }); for (const [a, v] of Object.entries(keep)) if (v) hit[a] = v; loose.delete(looseKey(k)); res.updated++; }
+      if (hit) { const keep = { id: hit.id, proof: hit.proof, approve: hit.approve, payee: hit.payee, cash: hit.cash, proof0: hit.proof0 }; Object.assign(hit, x, { key: k, t: now() }); for (const [a, v] of Object.entries(keep)) if (v != null && v !== '') hit[a] = v; loose.delete(looseKey(k)); res.updated++; }
       else { list.push({ id: uid(), ...(extra ? { t: now() } : {}), ...x, key: k }); res[field]++; }
       full.add(k);
     }

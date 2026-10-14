@@ -71,7 +71,34 @@ const onlineSum = date => offeringsOn(date, 'on').reduce((s, o) => s + rowTotal(
 const depositSum = date => db.deposits.filter(x => x.date === date).reduce((s, x) => s + x.amount, 0);
 /** 현금지출: 증빙 '현금' 지출 — 받은 헌금(현금)에서 바로 쓴 돈. 주일이 아닌 날짜는 그 앞 주일로 묶음 */
 const cashWeek = x => isSunday(x.date) ? x.date : lastSunday(x.date);
-const cashExpList = date => db.expenses.filter(x => x.proof === '현금' && (x.date === date || cashWeek(x) === date));
+/** 현금지출 = 증빙 '현금' 이거나, 거래일시 없는 지출(통장에서 나간 기록이 아님). x.cash로 직접 지정하면 그것을 따름 */
+const isCashExp = x => x.cash === true || (x.cash !== false && (x.proof === '현금' || (!x.time && x.via !== 'bank')));
+const cashExpList = date => db.expenses.filter(x => isCashExp(x) && (x.date === date || cashWeek(x) === date));
+/** 장부 잔액 − 통장 잔액 차이 풀이 */
+function reconData() {
+  const B = db.bank; if (!B) return null;
+  const y = +B.time.slice(0, 4), d0 = B.time.slice(0, 10);
+  const cut = B.week || (isSunday(d0) ? d0 : addDays(lastSunday(d0), 7));
+  const full = totals(actuals(`${y}-01-01`, `${y}-12-31`)), T = totals(actuals(`${y}-01-01`, cut));
+  const book = full.carry + T.inc - T.exp, diff = book - B.balance;
+  const inY = x => yearOf(x.date) === y && x.date <= cut;
+  // ① 현금 시재: 오프라인 헌금 + 현금 수입 − 현금입금 − 현금지출 (주별)
+  const weeks = new Map(), add = (d, k, v) => { const w = isSunday(d) ? d : addDays(lastSunday(d), 7); const o = weeks.get(w) || { d: w, off: 0, ci: 0, dep: 0, cx: 0 }; o[k] += v; weeks.set(w, o); };
+  db.offerings.filter(o => o.ch === 'off' && inY(o)).forEach(o => add(o.date, 'off', rowTotal(o)));
+  db.incomes.filter(x => inY(x) && !x.time && !isCarry(accByHang(x.acc))).forEach(x => add(x.date, 'ci', x.amount));
+  db.deposits.filter(inY).forEach(x => add(x.date, 'dep', x.amount));
+  db.expenses.filter(x => inY(x) && isCashExp(x)).forEach(x => add(x.date, 'cx', x.amount));
+  const wl = [...weeks.values()].map(o => ({ ...o, r: o.off + o.ci - o.dep - o.cx })).sort((a, b) => a.d.localeCompare(b.d));
+  const cash = wl.reduce((s, o) => s + o.r, 0);
+  // ② 통장 잔액 끊김 (총입출금에 없는 거래) — 장부엔 없고 통장엔 있음 → 장부−통장 = −gap
+  const checks = (B.checks || null) && B.checks.map(c => ({ ...c })), nt = (B.noTime || []).map(x => ({ ...x }));
+  // 거래일시 빈 '온라인' 줄은 장부·통장 모두에 있으나 잔액 검사에서 빠짐 → 같은 금액의 끊김과 짝지움
+  if (checks) for (const x of nt) { const c = checks.find(c => !c.by && c.gap === x.d); if (c) { c.by = x; x.hit = c; } }
+  const chain = checks ? -checks.reduce((s, c) => s + c.gap, 0) + nt.reduce((s, x) => s + x.d, 0) : 0;
+  // ③ 이월금 vs 첫 거래 전 통장 잔액
+  const open = B.open != null ? full.carry - B.open : 0;
+  return { y, cut, book, bank: B.balance, time: B.time, diff, cash, weeks: wl.filter(o => o.r), checks, noTime: nt, chain, open, hasOpen: B.open != null, rest: diff - cash - chain - open };
+}
 const cashExpSum = date => cashExpList(date).reduce((s, x) => s + x.amount, 0);
 function weeklyXLSX(date, all) {
   const C = weekKinds(date), rows = weeklyRows(date, all), ch = db.settings.church;
