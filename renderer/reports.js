@@ -66,6 +66,7 @@ function weeklyRows(date, all) {
   donors.sort(donorCmp);
   return donors.map(d => ({ d, o: byD.get(d.id) }));
 }
+const otherIncSum = date => db.incomes.filter(x => x.date === date).reduce((s, x) => s + x.amount, 0);
 const onlineSum = date => offeringsOn(date, 'on').reduce((s, o) => s + rowTotal(o), 0);
 const depositSum = date => db.deposits.filter(x => x.date === date).reduce((s, x) => s + x.amount, 0);
 /** 현금지출: 증빙 '현금' 지출 — 받은 헌금(현금)에서 바로 쓴 돈. 주일이 아닌 날짜는 그 앞 주일로 묶음 */
