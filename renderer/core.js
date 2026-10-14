@@ -64,6 +64,11 @@ function blankDB() {
     log: []
   };
 }
+/** 앱에서 지운 총입출금 거래 기억 — 다시 올려도 들어오지 않게 */
+function rememberDeleted(x, what) {
+  const k = x.key || (typeof keyOf === 'function' ? keyOf(x) : ''); if (!k) return;
+  (db.deleted = db.deleted || []).push({ key: k, what, date: x.date, time: x.time || '', amount: x.amount, memo: x.memo || '', acc: x.acc || x.kind || '', at: now() });
+}
 function migrate(d) {
   const b = blankDB();
   d.settings = Object.assign(b.settings, d.settings || {});
@@ -72,7 +77,7 @@ function migrate(d) {
   for (const k of ['accounts', 'donors', 'offerings', 'incomes', 'expenses', 'deposits', 'log']) d[k] = d[k] || b[k];
   for (const a of d.accounts) { a.kinds = a.kinds || (a.col ? [a.col] : []); a.mid = a.mid || ''; a.code = a.code || ''; a.note = a.note || ''; if (a.receipt == null) a.receipt = a.type === '수입' && !!a.kinds.length; }
   for (const o of d.offerings) o.ch = o.ch || 'off';
-  d.budgets = d.budgets || {}; d.receipts = d.receipts || {};
+  d.budgets = d.budgets || {}; d.receipts = d.receipts || {}; d.deleted = d.deleted || [];
   if (!d.donors.some(x => x.anon)) d.donors.push(b.donors[0]);
   return d;
 }

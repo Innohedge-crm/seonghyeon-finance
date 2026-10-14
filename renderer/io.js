@@ -242,6 +242,9 @@ function parseLedger(rows, hi, sn, out) {
     let run = first.bal;
     for (const x of chain.slice(fi + 1)) { run += x.d; if (x.bal !== null) { const gap = x.bal - run; if (Math.abs(gap) > 0.5) checks.push({ row: x.row, time: x.time, memo: x.memo, gap }); run = x.bal; } }
     out.bank.open = first.bal - first.d - chain.slice(0, fi).reduce((s, x) => s + x.d, 0);   // 첫 거래 전 통장 잔액
+    out.bank.from = chain[0].time;
+    const y0 = out.bank.time.slice(0, 4);   // 연초(전년 말~1월 초)부터 담긴 파일일 때만 이월 대조에 씀
+    out.bank.fromYearStart = chain[0].time < `${y0}-01-15`;
     out.bank.checks = checks; out.bank.noTime = noTime;
     if (noTime.length) out.warn.push(`비고 '온라인'인데 거래일시가 빈 줄 ${noTime.length}건: ${noTime.map(x => `${x.row}행 ${x.memo} ${won0(x.d)}`).join(', ')} — 통장 거래라면 거래일시를 넣어 주세요.`);
     if (checks.length) out.warn.push(`통장 잔액이 이어지지 않는 곳 ${checks.length}군데 (총입출금에 빠지거나 금액이 다른 거래 의심): ${checks.map(c => `${c.row}행 ${c.time.slice(5, 10)} ${won0(c.gap)}원`).join(', ')}`);
@@ -347,14 +350,18 @@ const looseKey = k => { if (!k || !/^\d{4}-\d{2}-\d{2} \d/.test(k)) return null;
 const haveKeys = () => { const k = new Set(); for (const o of db.offerings) for (const x of o.keys || []) k.add(x); return k; };
 const keyOf = x => x.key || [x.date, x.acc || x.kind, x.amount, x.memo].join('|');
 /** 새로 들어올 / 고쳐진 온라인 헌금·기타수입·지출·현금입금 개수 */
+/** 지운 거래인지: 같은 키, 또는 같은 거래일시·금액(엑셀에서 내용만 고친 경우) */
+function delSets() { const f = new Set((db.deleted || []).map(x => x.key)); return { f, l: new Set([...f].map(looseKey).filter(Boolean)) }; }
+const isDeleted = (DS, k) => DS.f.has(k) || (!!looseKey(k) && DS.l.has(looseKey(k)));
 function importNewCounts(P) {
-  const ok = haveKeys(), okL = new Set([...ok].map(looseKey).filter(Boolean));
+  const ok = haveKeys(), okL = new Set([...ok].map(looseKey).filter(Boolean)), DS = delSets();
   const sets = L => { const f = new Set(L.map(keyOf)); return { f, l: new Set([...f].map(looseKey).filter(Boolean)) }; };
   const I = sets(db.incomes), E = sets(db.expenses), D = sets(db.deposits);
-  const cnt = (list, S, kf) => { let n = 0, u = 0; for (const x of list) { const k = kf(x); if (S.f.has(k)) continue; const lk = looseKey(k); if (lk && S.l.has(lk)) u++; else n++; } return [n, u]; };
+  let del = 0;
+  const cnt = (list, S, kf) => { let n = 0, u = 0; for (const x of list) { const k = kf(x); if (S.f.has(k)) continue; if (isDeleted(DS, k)) { del++; continue; } const lk = looseKey(k); if (lk && S.l.has(lk)) u++; else n++; } return [n, u]; };
   const [on, onU] = cnt(P.offerings.filter(o => o.ch === 'on'), { f: ok, l: okL }, o => o.key);
   const [inc, incU] = cnt(P.incomes, I, keyOf), [exp, expU] = cnt(P.expenses, E, keyOf), [dep, depU] = cnt(P.deposits, D, keyOf);
-  return { on, inc, exp, dep, upd: onU + incU + expU + depU };
+  return { on, inc, exp, dep, upd: onU + incU + expU + depU, del };
 }
 
 function applyImport(P, dates, opt = {}) {
@@ -396,7 +403,7 @@ function applyImport(P, dates, opt = {}) {
   res.updated = 0;
   // 엑셀에서 고친 온라인 거래: 같은 일시·금액의 옛 기록을 빼고 새로 넣음
   const byLoose = new Map(); for (const r of db.offerings) if (r.ch === 'on') for (const k of r.keys || []) { const lk = looseKey(k); if (lk) byLoose.set(lk, { r, k }); }
-  for (const o of P.offerings.filter(o => o.ch === 'on' && !ok.has(o.key))) {
+  const DSo = delSets(); for (const o of P.offerings.filter(o => o.ch === 'on' && !ok.has(o.key) && !isDeleted(DSo, o.key))) {
     const lk = looseKey(o.key), hit = lk && byLoose.get(lk);
     if (hit) {
       const { r, k } = hit, amt = Object.values(o.a).reduce((s, v) => s + v, 0);
@@ -416,10 +423,12 @@ function applyImport(P, dates, opt = {}) {
   res.newDonors = Math.max(0, db.donors.length - before);
   for (const d of db.donors.slice(before)) if (GROUP_NAME.test(d.name)) d.group = true;
   // 기타수입·지출·현금입금: 새 거래는 추가, 일시·금액이 같고 내용·계정만 고친 거래는 그 자리에서 고침
+  const DS = delSets(); res.skippedDel = 0;
   const merge = (list, src, field, extra) => {
     const full = new Set(list.map(keyOf)), byKey = new Map(list.map(x => [keyOf(x), x])), loose = new Map(); for (const x of list) { const lk = looseKey(keyOf(x)); if (lk) loose.set(lk, x); }
     for (const x of src) {
-      const k = keyOf(x); if (full.has(k)) { const e = byKey.get(k); if (e && x.via && e.via == null) e.via = x.via; continue; }   // 예전 기록에 통장/현금 구분 채움
+      const k = keyOf(x); if (!full.has(k) && isDeleted(DS, k)) { res.skippedDel++; continue; }
+      if (full.has(k)) { const e = byKey.get(k); if (e && x.via && e.via == null) e.via = x.via; continue; }   // 예전 기록에 통장/현금 구분 채움
       const hit = looseKey(k) && loose.get(looseKey(k));
       if (hit) { const keep = { id: hit.id, proof: hit.proof, approve: hit.approve, payee: hit.payee, cash: hit.cash, proof0: hit.proof0 }; Object.assign(hit, x, { key: k, t: now() }); for (const [a, v] of Object.entries(keep)) if (v != null && v !== '') hit[a] = v; loose.delete(looseKey(k)); res.updated++; }
       else { list.push({ id: uid(), ...(extra ? { t: now() } : {}), ...x, key: k }); res[field]++; }
@@ -428,7 +437,14 @@ function applyImport(P, dates, opt = {}) {
   };
   merge(db.incomes, P.incomes, 'incomes', true); merge(db.expenses, P.expenses, 'expenses', true); merge(db.deposits, P.deposits, 'deposits', false);
   for (const b of P.budgets) { (db.budgets[b.year] = db.budgets[b.year] || {})[b.hang] = b.amount; res.budgets++; }
-  if (P.bank && (!db.bank || P.bank.time >= db.bank.time)) db.bank = P.bank;
+  if (P.bank && (!db.bank || P.bank.time >= db.bank.time)) {
+    const old = db.bank || {}, B = { ...P.bank }, from = B.from || '', to = B.time;
+    // 일부 기간만 올린 파일: 그 기간 밖의 검사 결과·시작 잔액은 예전 것 유지
+    if (old.checks) B.checks = [...old.checks.filter(c => c.time < from || c.time > to), ...(B.checks || [])].sort((a, b) => a.time.localeCompare(b.time));
+    if (old.noTime) B.noTime = [...old.noTime.filter(x => x.date < from.slice(0, 10) || x.date > to.slice(0, 10)), ...(B.noTime || [])];
+    if (!B.fromYearStart) { B.open = old.open; }
+    db.bank = B;
+  }
   logAct(`가져오기(${P.src}): 오프라인 주일 ${res.dates}개 ${res.rows}줄, 온라인 ${res.online}건, 새 헌금자 ${res.newDonors}명, 기타수입 ${res.incomes}, 지출 ${res.expenses}, 현금입금 ${res.deposits}, 고친 거래 ${res.updated}, 예산 ${res.budgets}${res.rrn ? `, 주민번호 ${res.rrn}명` : ''}`);
   save(true);
   return res;

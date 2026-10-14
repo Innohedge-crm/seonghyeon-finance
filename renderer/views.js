@@ -346,7 +346,8 @@ function ledgerForm(isExp, x) {
   };
   const del = d.querySelector('[data-del]');
   if (del) del.onclick = async () => {
-    if (!(await confirmBox(`${dotDate(x.date)} ${x.acc || x.kind || ''} ${won0(x.amount)}원 기록을 삭제할까요?${x.key ? '\n(총입출금을 다시 올리면 다시 들어옵니다)' : ''}`, '삭제', true))) return;
+    if (!(await confirmBox(`${dotDate(x.date)} ${x.acc || x.kind || ''} ${won0(x.amount)}원 기록을 삭제할까요?${x.key ? '\n(총입출금 거래 — 다시 올려도 들어오지 않게 기억합니다. 설정 → 지운 거래에서 되살릴 수 있습니다)' : ''}`, '삭제', true))) return;
+    if (x.key) rememberDeleted(x, isExp ? '지출' : '기타수입');
     if (isExp) db.expenses = db.expenses.filter(z => z.id !== x.id); else db.incomes = db.incomes.filter(z => z.id !== x.id);
     logAct(`${isExp ? '지출' : '기타수입'} 삭제: ${x.date} ${x.acc} ${won0(x.amount)}`); save(); render();
   };
@@ -555,7 +556,7 @@ function donorForm(d) {
       if (!(await confirmBox(`${d.name} → ${to.name} 로 합칩니다.${clash ? `\n같은 주일에 둘 다 기록이 있는 ${clash}건은 금액을 더합니다.` : ''}`, '합치기'))) return;
       for (const o of db.offerings.filter(o => o.donorId === d.id)) {
         const p = db.offerings.find(p => p.donorId === to.id && p.date === o.date);
-        if (p) { for (const [k, v] of Object.entries(o.a)) p.a[k] = (p.a[k] || 0) + v; p.memo = [p.memo, o.memo].filter(Boolean).join(' / '); db.offerings = db.offerings.filter(x => x !== o); }
+        if (p) { for (const [k, v] of Object.entries(o.a)) p.a[k] = (p.a[k] || 0) + v; p.memo = [p.memo, o.memo].filter(Boolean).join(' / '); if (o.keys && o.keys.length) { p.keys = [...(p.keys || []), ...o.keys]; p.ka = { ...(p.ka || {}), ...(o.ka || {}) }; } db.offerings = db.offerings.filter(x => x !== o); }
         else o.donorId = to.id;
       }
       for (const k of ['title', 'phone', 'address', 'rrn']) if (!to[k] && d[k]) to[k] = d[k];
@@ -675,7 +676,7 @@ function previewImport(P) {
   ${dates.some(g => g.status === 'fix') ? `<p class="hint"><span class="pill info">정리</span> 주차·회비·찬조 같은 현금 헌금이 ‘기타수입’에 따로 들어가 있던 주일입니다. 금액은 같고, 주일 헌금 쪽으로 옮겨 집계표·현금입금 대조에 포함합니다(기본 체크).</p>` : ''}
   <p class="hint">‘다름’은 앱에서 이미 입력·수정한 주일입니다. 기본으로 체크하지 않았습니다 — 체크하면 그 주일은 파일 내용으로 바뀝니다.</p>` : (P.donorInfo.length ? '' : '<p class="muted">헌금 내역 없음</p>')}
   ${P.donorInfo.length ? (() => { const miss = P.donorInfo.filter(d => { const x = donorByName(d.name); return !x || x.anon; }); return `<p>주민번호 <b>${P.donorInfo.length - miss.length}명</b>을 헌금자 명단에 채웁니다.${miss.length ? ` <span class="pill warn">명단에 없는 이름 ${miss.length}명</span> <span class="muted">${miss.slice(0, 20).map(d => esc(d.name)).join(', ')}${miss.length > 20 ? ' …' : ''} — 새로 추가하지 않습니다. 헌금자 명단에서 이름을 맞춘 뒤 다시 올리세요.</span>` : ''}</p>`; })() : ''}
-  ${(() => { const c = importNewCounts(P); return `<p>새로 들어올 것: ${c.upd ? `<span class="pill info">엑셀에서 고친 거래 ${c.upd}건 반영</span> ` : ''}온라인 헌금 <b>${c.on}</b>건 · 기타수입 <b>${c.inc}</b>건 · 지출 <b>${c.exp}</b>건 · 현금입금 <b>${c.dep}</b>건${P.budgets.length ? ` · 예산 <b>${P.budgets.length}</b>항목(${[...new Set(P.budgets.map(b => b.year))].join(', ')}년)` : ''}${P.donors.length ? ` · 헌금자 정보 ${P.donors.length}명` : ''}${P.bank ? ` · 통장 잔액 ${won0(P.bank.balance)} (${esc(P.bank.time)})` : ''}</p>`; })()}
+  ${(() => { const c = importNewCounts(P); return `<p>새로 들어올 것: ${c.upd ? `<span class="pill info">엑셀에서 고친 거래 ${c.upd}건 반영</span> ` : ''}온라인 헌금 <b>${c.on}</b>건 · 기타수입 <b>${c.inc}</b>건 · 지출 <b>${c.exp}</b>건 · 현금입금 <b>${c.dep}</b>건${c.del ? ` · <span class="pill">앱에서 지운 거래 ${c.del}건은 넣지 않음</span>` : ''}${P.budgets.length ? ` · 예산 <b>${P.budgets.length}</b>항목(${[...new Set(P.budgets.map(b => b.year))].join(', ')}년)` : ''}${P.donors.length ? ` · 헌금자 정보 ${P.donors.length}명` : ''}${P.bank ? ` · 통장 잔액 ${won0(P.bank.balance)} (${esc(P.bank.time)})` : ''}</p>`; })()}
   <div class="acts"><button class="btn" data-x>취소</button><button class="btn pri" data-ok>가져오기</button></div>`, { wide: true });
   const all = $('#iall', m); if (all) all.onchange = () => $$('[data-i]', m).forEach(c => { c.checked = all.checked; dates[+c.dataset.i].pick = c.checked; });
   $$('[data-i]', m).forEach(c => c.onchange = () => dates[+c.dataset.i].pick = c.checked);
@@ -684,7 +685,7 @@ function previewImport(P) {
   m.querySelector('[data-ok]').onclick = () => {
     const r = applyImport(P, dates, { accounts: $('#ia', m) ? $('#ia', m).checked : false, expAccounts: $('#iea', m) ? $('#iea', m).checked : false });
     closeModal(); render();
-    modal(`<h2>가져왔습니다</h2><dl class="kv">${r.rrn || r.rrnMiss.length ? `<dt>주민번호</dt><dd>${r.rrn}명 입력${r.rrnMiss.length ? ` · 명단에 없는 이름 ${r.rrnMiss.length}명: ${r.rrnMiss.map(esc).join(', ')}` : ''}</dd>` : ''}<dt>오프라인 헌금</dt><dd>${r.dates}주 (${r.rows}줄)${r.fixed ? ` · 기타수입에서 옮김 ${r.fixed}건` : ''}</dd><dt>온라인 헌금</dt><dd>${r.online}건</dd>${r.updated ? `<dt>고친 거래</dt><dd>${r.updated}건</dd>` : ''}<dt>현금입금</dt><dd>${r.deposits}건</dd><dt>새 헌금자</dt><dd>${r.newDonors}명</dd><dt>헌금자 정보</dt><dd>${r.donors}명</dd><dt>기타수입</dt><dd>${r.incomes}건</dd><dt>지출</dt><dd>${r.expenses}건</dd><dt>예산</dt><dd>${r.budgets}항목</dd></dl>
+    modal(`<h2>가져왔습니다</h2><dl class="kv">${r.rrn || r.rrnMiss.length ? `<dt>주민번호</dt><dd>${r.rrn}명 입력${r.rrnMiss.length ? ` · 명단에 없는 이름 ${r.rrnMiss.length}명: ${r.rrnMiss.map(esc).join(', ')}` : ''}</dd>` : ''}<dt>오프라인 헌금</dt><dd>${r.dates}주 (${r.rows}줄)${r.fixed ? ` · 기타수입에서 옮김 ${r.fixed}건` : ''}</dd><dt>온라인 헌금</dt><dd>${r.online}건</dd>${r.updated ? `<dt>고친 거래</dt><dd>${r.updated}건</dd>` : ''}<dt>현금입금</dt><dd>${r.deposits}건</dd><dt>새 헌금자</dt><dd>${r.newDonors}명</dd><dt>헌금자 정보</dt><dd>${r.donors}명</dd><dt>기타수입</dt><dd>${r.incomes}건</dd><dt>지출</dt><dd>${r.expenses}건</dd>${r.skippedDel ? `<dt>지운 거래</dt><dd>${r.skippedDel}건 건너뜀</dd>` : ''}<dt>예산</dt><dd>${r.budgets}항목</dd></dl>
     <div class="acts"><button class="btn" data-x>닫기</button><button class="btn pri" data-h>현황 보기</button></div>`);
     $('[data-x]').onclick = closeModal; $('[data-h]').onclick = () => { closeModal(); go('home'); };
   };
@@ -763,6 +764,10 @@ VIEWS.settings = () => {
   <div class="panel"><h2>프로그램 잠금</h2><p class="muted">${s.lockHash ? '켜져 있음 — 프로그램을 켤 때 비밀번호를 묻습니다.' : '꺼져 있음'}</p>
     <div class="row"><input type="password" id="lp" placeholder="새 비밀번호" autocomplete="new-password"><button class="btn" id="lpb">${s.lockHash ? '바꾸기' : '켜기'}</button>${s.lockHash ? '<button class="btn danger" id="lpo">끄기</button>' : ''}</div>
     <p class="hint">비밀번호를 잊으면 데이터 폴더의 data.json에서 lockHash 값을 지우면 됩니다(담당자만).</p></div>
+  <div class="panel" style="grid-column:1/-1"><h2>지운 거래 <span class="muted" style="font-weight:400;font-size:14px">${(db.deleted || []).length}건</span></h2>
+    <p class="muted">앱에서 삭제한 총입출금 거래입니다. 엑셀에 그 줄이 남아 있어도 다시 들어오지 않습니다. ‘되살리기’ 하면 다음에 총입출금을 올릴 때 다시 들어옵니다.</p>
+    ${(db.deleted || []).length ? `<div class="tbl-wrap" style="max-height:260px"><table><thead><tr><th>구분</th><th>주(Month)</th><th>거래일시</th><th>계정</th><th class="num">금액</th><th>내용</th><th></th></tr></thead><tbody>
+    ${db.deleted.map((x, i) => `<tr><td>${esc(x.what)}</td><td>${dotDate(x.date)}</td><td class="muted">${esc((x.time || '').slice(5, 16).replace('-', '.'))}</td><td>${esc(x.acc)}</td><td class="num">${won0(x.amount)}</td><td>${esc(x.memo)}</td><td><button class="btn sm" data-undel="${i}">되살리기</button></td></tr>`).join('')}</tbody></table></div>` : ''}</div>
   <div class="panel"><h2>백업 · 복원</h2><p class="muted" id="ddir">데이터는 문서\\성현교회재정\\data.json 에 저장되고, 하루 한 번 백업 폴더에 사본이 남습니다(90일).</p>
     <div class="row"><button class="btn" id="bk">백업 파일 저장</button><button class="btn" id="rs">백업에서 복원</button></div>
     <p class="hint">백업 파일에는 헌금 금액과 주민번호가 들어 있습니다. USB 등에 보관할 때 주의하세요.</p></div>
@@ -770,6 +775,7 @@ VIEWS.settings = () => {
 };
 BIND.settings = () => {
   const s = db.settings;
+  $$('[data-undel]').forEach(b => b.onclick = () => { const x = db.deleted.splice(+b.dataset.undel, 1)[0]; logAct(`지운 거래 되살림: ${x.date} ${x.acc} ${won0(x.amount)}`); save(); render(); toast('다음 총입출금 올리기 때 다시 들어옵니다'); });
   $$('[data-ch]').forEach(i => i.onchange = () => { s.church[i.dataset.ch] = i.value.trim(); save(); renderNav(); });
   $$('[data-rc]').forEach(i => i.onchange = () => { s.receipt[i.dataset.rc] = i.value.trim(); save(); });
   $('#cnt').onchange = e => { s.counters = e.target.value.trim(); save(); };
