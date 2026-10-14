@@ -49,6 +49,7 @@ function blankDB() {
       sheetId: '1SEj0VlbOC2xFh16rUCeN2VSQYF5Q7_Ib-t9PHmymHCs',
       counters: '',                       // 주간 집계표 담당자
       receipt: { code: '41', kind: '금전', law: '소득세법 제34조제3항제1호', issuer: '' },
+      rollUrl: '', rollKey: '',          // 교적관리 시트(출석부 웹앱) — 읽기만
       lockHash: '', showAllDonors: true
     },
     accounts: FD.accounts.map(a => ({ id: uid(), ...a })),
@@ -113,6 +114,14 @@ function nameMatch(name, q) {
   }
   return false;
 }
+/** 주민번호 정리: 숫자 13자리 → 000000-0000000 (엑셀 숫자로 앞 0이 빠진 12자리도 복구) */
+function normRRN(v) {
+  if (v == null || v === '') return '';
+  let d = String(typeof v === 'number' ? Math.round(v) : v).replace(/[^\d]/g, '');
+  if (d.length === 12) d = '0' + d;
+  return d.length === 13 ? d.slice(0, 6) + '-' + d.slice(6) : String(v).trim();
+}
+const rrnOk = v => /^\d{6}-\d{7}$/.test(v || '');
 const normName = s => String(s || '').replace(/\s+/g, ' ').trim();
 const donorByName = n => { const k = normName(n).replace(/\s/g, ''); return db.donors.find(d => d.name.replace(/\s/g, '') === k); };
 const activeDonors = () => db.donors.filter(d => !d.inactive).sort((a, b) => (a.anon - b.anon) || (a.no - b.no) || a.name.localeCompare(b.name, 'ko'));

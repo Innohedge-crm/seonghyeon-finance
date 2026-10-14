@@ -46,7 +46,7 @@ function headerMap(row) {
 
 /** 워크북 → 가져올 내용 */
 function parseWorkbook(wb, srcName) {
-  const out = { src: srcName, offerings: [], donors: [], incomes: [], expenses: [], deposits: [], budgets: [], accounts: null, expAccounts: null, bank: null, warn: [], sheets: [] };
+  const out = { src: srcName, offerings: [], donors: [], incomes: [], expenses: [], deposits: [], budgets: [], donorInfo: [], accounts: null, expAccounts: null, bank: null, warn: [], sheets: [] };
   const rowsOf = ws => XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: false });
   const isExample = r => r.some(c => typeof c === 'string' && /^예시/.test(c.trim()));
   const hdr = (r, names) => { const idx = {}; r.forEach((h, i) => { const n = normHead(h); for (const [k, alts] of Object.entries(names)) if (alts.includes(n)) idx[k] = i; }); return idx; };
@@ -56,6 +56,9 @@ function parseWorkbook(wb, srcName) {
     if (!rows.length) continue;
     const name = sn.replace(/\s/g, '');
 
+    // 교인 인적사항(주민번호) 엑셀 — 시트 이름·열 순서 무관. 이름 + 주민번호(또는 앞/뒷자리) 열이 있으면
+    const rh = rows.slice(0, 6).findIndex(r => r.some(c => /^(이름|성명|교인명)$/.test(normHead(c))) && r.some(c => /주민/.test(String(c || ''))));
+    if (rh >= 0 && !rows.slice(0, 6).some(r => r.some(c => normHead(c) === '헌금종류'))) { parseDonorInfo(rows, rh, sn, out); continue; }
     // 총입출금내역 (거래일시·내용·출금·입금·거래후 잔액·지출계정과목·비고·헌금종류·Month·현금입금)
     const lh = rows.slice(0, 6).findIndex(r => r.some(c => normHead(c) === '헌금종류') && r.some(c => /^(입금|출금)$/.test(normHead(c))));
     if (lh >= 0) { parseLedger(rows, lh, sn, out); continue; }
@@ -80,7 +83,7 @@ function parseWorkbook(wb, srcName) {
       if (h.name == null) continue;
       for (const r of rows.slice(1)) {
         if (!r[h.name] || isExample(r)) continue;
-        out.donors.push({ no: +r[h.no] || 0, name: normName(r[h.name]), title: r[h.title] || '', phone: r[h.phone] || '', address: r[h.address] || '', rrn: r[h.rrn] ? String(r[h.rrn]) : '', note: r[h.note] || '' });
+        out.donors.push({ no: +r[h.no] || 0, name: normName(r[h.name]), title: r[h.title] || '', phone: r[h.phone] || '', address: r[h.address] || '', rrn: normRRN(r[h.rrn]), note: r[h.note] || '' });
       }
       out.sheets.push(`${sn}: ${out.donors.length}명`);
       continue;
@@ -232,6 +235,24 @@ function parseLedger(rows, hi, sn, out) {
   if (badAcc.length) out.warn.push(`지출예산에 없는 지출계정과목: ${badAcc.join(', ')}`);
 }
 
+/* ---------- 교인 인적사항(주민번호) ---------- */
+function parseDonorInfo(rows, hi, sn, out) {
+  const H = rows[hi].map(c => String(c ?? ''));
+  const find = re => H.findIndex(c => re.test(normHead(c)));
+  const cName = find(/^(이름|성명|교인명)$/), cA = find(/^주민.*(앞|생년)/), cB = find(/^주민.*(뒤|뒷)/), cR = cA < 0 ? find(/^주민/) : -1;
+  const cAddr = find(/^주소/), cPhone = find(/^(연락처|전화|휴대폰|핸드폰)/);
+  let n = 0, bad = 0;
+  for (const r of rows.slice(hi + 1)) {
+    const name = normName(r[cName]); if (!name) continue;
+    let rrn = cR >= 0 ? normRRN(r[cR]) : (cA >= 0 && cB >= 0 ? normRRN(String(r[cA] ?? '').padStart(6, '0') + String(r[cB] ?? '')) : '');
+    if (!rrn) continue;
+    if (!rrnOk(rrn)) { bad++; continue; }
+    out.donorInfo.push({ name, rrn, address: cAddr >= 0 ? String(r[cAddr] ?? '').trim() : '', phone: cPhone >= 0 ? String(r[cPhone] ?? '').trim() : '' }); n++;
+  }
+  out.sheets.push(`${sn}: 주민번호 ${n}명`);
+  if (bad) out.warn.push(`${sn}: 주민번호 형식(13자리)이 아닌 ${bad}줄은 건너뜀`);
+}
+
 /* ---------- 수입·지출 예산서 ---------- */
 const yearIn = rows => { for (const r of rows.slice(0, 5)) for (const c of r) { const m = String(c || '').match(/(\d{4})\s*년도/); if (m) return +m[1]; } return 0; };
 function parseIncomeBudget(rows, hi, sn, out) {
@@ -317,6 +338,13 @@ function applyImport(P, dates, opt = {}) {
     for (const k of ['title', 'phone', 'address', 'rrn', 'note']) if (d[k]) x[k] = String(d[k]);
     res.donors++;
   }
+  res.rrn = 0; res.rrnMiss = [];
+  for (const d of P.donorInfo || []) {           // 주민번호: 명단에 있는 사람만 채움 (새로 추가하지 않음)
+    const x = donorByName(d.name);
+    if (!x || x.anon) { res.rrnMiss.push(d.name); continue; }
+    x.rrn = d.rrn; if (!x.address && d.address) x.address = d.address; if (!x.phone && d.phone) x.phone = d.phone;
+    res.rrn++;
+  }
   for (const g of dates.filter(g => g.pick)) {
     db.offerings = db.offerings.filter(o => !(o.date === g.date && o.ch === 'off'));
     for (const o of g.rows) {
@@ -343,7 +371,7 @@ function applyImport(P, dates, opt = {}) {
   for (const x of P.deposits) if (!kd.has(keyOf(x))) { db.deposits.push({ id: uid(), ...x, key: keyOf(x) }); kd.add(keyOf(x)); res.deposits++; }
   for (const b of P.budgets) { (db.budgets[b.year] = db.budgets[b.year] || {})[b.hang] = b.amount; res.budgets++; }
   if (P.bank && (!db.bank || P.bank.time >= db.bank.time)) db.bank = P.bank;
-  logAct(`가져오기(${P.src}): 오프라인 주일 ${res.dates}개 ${res.rows}줄, 온라인 ${res.online}건, 새 헌금자 ${res.newDonors}명, 기타수입 ${res.incomes}, 지출 ${res.expenses}, 현금입금 ${res.deposits}, 예산 ${res.budgets}`);
+  logAct(`가져오기(${P.src}): 오프라인 주일 ${res.dates}개 ${res.rows}줄, 온라인 ${res.online}건, 새 헌금자 ${res.newDonors}명, 기타수입 ${res.incomes}, 지출 ${res.expenses}, 현금입금 ${res.deposits}, 예산 ${res.budgets}${res.rrn ? `, 주민번호 ${res.rrn}명` : ''}`);
   save(true);
   return res;
 }

@@ -428,8 +428,8 @@ VIEWS.donors = () => {
   const list = db.donors.slice().sort((a, b) => (a.anon - b.anon) || (!!a.inactive - !!b.inactive) || (a.no - b.no));
   const tot = id => db.offerings.filter(o => o.donorId === id && yearOf(o.date) === y).reduce((s, o) => s + rowTotal(o), 0);
   const cnt = id => new Set(db.offerings.filter(o => o.donorId === id && yearOf(o.date) === y).map(o => o.date)).size;
-  return `<div class="head"><div><h1>헌금자 명단</h1><p>${db.donors.filter(d => !d.anon && !d.inactive).length}명 (무명 제외) · 주소·주민번호는 기부금영수증에만 쓰이고 이 PC에만 저장됩니다</p></div>
-  <div class="row"><button class="btn" id="roll">출석부 교인명단 가져오기</button><button class="btn pri" id="addd">+ 헌금자</button></div></div>
+  return `<div class="head"><div><h1>헌금자 명단</h1><p>${db.donors.filter(d => !d.anon && !d.inactive).length}명 (무명 제외) · 주민번호 ${db.donors.filter(d => rrnOk(d.rrn)).length}명 입력 · 주민번호는 기부금영수증에만 쓰이고 이 PC에만 저장됩니다</p></div>
+  <div class="row"><button class="btn" id="roll">교적관리 시트에서 가져오기</button><button class="btn" id="rrnf">주민번호 엑셀 불러오기</button><button class="btn pri" id="addd">+ 헌금자</button></div></div>
   <div class="toolbar"><input type="search" id="dq" placeholder="이름 검색" value="${esc(q)}">${yearSel('dy', y)}<span class="hint">번호 순서가 주간 집계표 순서입니다.</span></div>
   <div class="tbl-wrap"><table><thead><tr><th class="num">번호</th><th>이름</th><th>직분</th><th>연락처</th><th>주소</th><th>주민번호</th><th class="num">${y} 주일수</th><th class="num">${y} 합계</th><th></th></tr></thead><tbody>
   ${list.map(d => `<tr class="click" data-id="${d.id}" data-nm="${esc(d.name)}" ${q && !nameMatch(d.name, q) ? 'hidden' : ''}><td class="num">${d.anon ? '' : d.no}</td><td><b>${esc(d.name)}</b>${d.inactive ? ' <span class="pill">숨김</span>' : ''}</td><td>${esc(d.title || '')}</td><td>${esc(d.phone || '')}</td><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis">${esc(d.address || '')}</td><td>${d.rrn ? esc(String(d.rrn).slice(0, 8)) + '******' : ''}</td><td class="num">${cnt(d.id) || ''}</td><td class="num">${won(tot(d.id))}</td><td></td></tr>`).join('')}
@@ -488,19 +488,72 @@ BIND.donors = () => {
   $('#dy').onchange = e => go('donors', { year: +e.target.value });
   $('#addd').onclick = () => donorForm();
   $$('tr[data-id]').forEach(tr => tr.onclick = () => donorForm(donorById(tr.dataset.id)));
-  $('#roll').onclick = async () => {
-    if (!API) return toast('설치된 프로그램에서만 됩니다');
-    const ms = await API.rollMembers();
-    if (!ms) return toast('이 PC에서 출석부 데이터를 찾지 못했습니다 (문서\\성현교회출석부)');
-    const act = ms.filter(m => !/전출|소천|제명/.test(m.status));
-    const add = act.filter(m => !donorByName(m.name));
-    const fill = act.filter(m => { const d = donorByName(m.name); return d && ((!d.title && m.title) || (!d.phone && m.phone) || (!d.address && m.address)); });
-    if (!(await confirmBox(`출석부 교인 ${act.length}명 중\n· 새로 추가: ${add.length}명\n· 직분·연락처·주소 빈칸 채우기: ${fill.length}명\n\n헌금 기록은 바뀌지 않습니다.`, '가져오기'))) return;
-    for (const m of add) ensureDonor(m.name, { title: m.title, phone: m.phone, address: m.address });
-    for (const m of fill) { const d = donorByName(m.name); for (const k of ['title', 'phone', 'address']) if (!d[k] && m[k]) d[k] = m[k]; }
-    logAct(`출석부 명단 가져오기: 추가 ${add.length}, 보완 ${fill.length}`); save(); render(); toast(`추가 ${add.length}명 · 보완 ${fill.length}명`);
+  $('#roll').onclick = rollImport;
+  $('#rrnf').onclick = async () => {
+    const f = await pickFile(['xlsx', 'xls', 'csv']); if (!f) return;
+    try { const P = parseWorkbook(readWorkbook(f.bytes), f.name); if (!P.donorInfo.length) return toast('이름과 주민번호 열을 찾지 못했습니다. 머리글에 "이름"(또는 성명)과 "주민번호"가 있어야 합니다', 5000); previewImport(P); }
+    catch (e) { toast('파일을 읽지 못했습니다: ' + e.message, 5000); }
   };
 };
+
+/* ---------- 교적관리 시트(출석부 웹앱)에서 교인명단 가져오기 — 읽기만 ---------- */
+const EXCL = /전출|소천|제명|별세|이명/;
+async function fetchRoll() {
+  const s = db.settings;
+  if (s.rollUrl) {
+    if (!API) throw new Error('설치된 프로그램에서만 됩니다');
+    const u = s.rollUrl.trim() + (s.rollUrl.includes('?') ? '&' : '?') + 'action=pull&key=' + encodeURIComponent(s.rollKey || '');
+    const r = await API.httpBin(u);
+    let j; try { j = JSON.parse(new TextDecoder().decode(r.bytes)); } catch { throw new Error('응답을 읽지 못했습니다. 웹앱 URL(…/exec)이 맞는지 확인하세요'); }
+    if (!j.ok) throw new Error(j.error === 'key' ? 'KEY가 맞지 않습니다' : (j.error || '오류'));
+    return { src: '교적관리 시트', members: (j.data.members || []).filter(m => !m.deleted && m.deleted !== 'Y' && m.deleted !== true) };
+  }
+  if (API) { const ms = await API.rollMembers(); if (ms) return { src: '이 PC의 출석부 앱', members: ms }; }
+  throw new Error('설정 → 교적관리 시트 연결에 출석부 웹앱 URL과 KEY를 넣어 주세요');
+}
+async function rollImport() {
+  let R; try { R = await fetchRoll(); } catch (e) { return toast(e.message, 5000); }
+  const ms = R.members.filter(m => normName(m.name));
+  const act = ms.filter(m => !EXCL.test(m.status || '')), ex = ms.filter(m => EXCL.test(m.status || ''));
+  const F = ['title', 'phone', 'address', 'district'], FL = { title: '직분', phone: '연락처', address: '주소', district: '구역' };
+  const find = m => (m.id && db.donors.find(d => d.mid === m.id)) || (() => { const d = donorByName(m.name); return d && (!d.mid || d.mid === m.id) ? d : null; })();
+  const add = [], upd = [];
+  for (const m of act) {
+    const d = find(m);
+    if (!d) { add.push(m); continue; }
+    const ch = F.filter(k => (m[k] || '') && String(m[k]).trim() !== (d[k] || ''));
+    const rename = normName(m.name).replace(/\s/g, '') !== d.name.replace(/\s/g, '');
+    if (ch.length || rename || d.mid !== m.id) upd.push({ m, d, ch, rename });
+  }
+  const sheetIds = new Set(ms.map(m => m.id)), sheetNames = new Set(ms.map(m => normName(m.name).replace(/\s/g, '')));
+  const only = db.donors.filter(d => !d.anon && !d.inactive && !(d.mid && sheetIds.has(d.mid)) && !sheetNames.has(d.name.replace(/\s/g, '')));
+  const exHere = ex.map(m => find(m)).filter(d => d && !d.inactive);
+  const m = modal(`<h2>${esc(R.src)}에서 교인명단 가져오기</h2>
+  <p class="muted">교인 ${ms.length}명 (전출·소천·제명 ${ex.length}명 제외). 시트는 읽기만 하고 고치지 않습니다. 헌금 기록은 바뀌지 않습니다.</p>
+  <dl class="kv"><dt>새로 추가</dt><dd>${add.length}명 ${add.length ? `<span class="muted">${add.slice(0, 25).map(x => esc(x.name)).join(', ')}${add.length > 25 ? ' …' : ''}</span>` : ''}</dd>
+  <dt>정보 갱신</dt><dd>${upd.length}명 ${upd.length ? `<span class="muted">${upd.slice(0, 15).map(u => esc(u.d.name) + (u.rename ? '→' + esc(normName(u.m.name)) : '') + (u.ch.length ? '(' + u.ch.map(k => FL[k]).join('·') + ')' : '')).join(', ')}${upd.length > 15 ? ' …' : ''}</span>` : ''}</dd>
+  ${exHere.length ? `<dt>숨김 처리</dt><dd>${exHere.length}명 <span class="muted">${exHere.map(d => esc(d.name)).join(', ')} — 시트에서 전출·소천 등. 기록은 유지</span></dd>` : ''}
+  <dt>재정 앱에만 있음</dt><dd>${only.length}명 ${only.length ? `<span class="muted">${only.slice(0, 25).map(d => esc(d.name)).join(', ')}${only.length > 25 ? ' …' : ''} — 단체명·오타·교적 미등록일 수 있습니다. 그대로 둡니다(같은 사람이면 헌금자 명단 ‘합치기’).</span>` : ''}</dd></dl>
+  <label style="display:flex;gap:8px;margin-top:12px"><input type="checkbox" id="rovr" checked> 직분·연락처·주소·구역은 시트 값을 따름 (시트에 값이 있을 때만)</label>
+  <label style="display:flex;gap:8px;margin-top:6px"><input type="checkbox" id="radd" checked> 시트에만 있는 교인을 헌금자 명단에 추가</label>
+  <div class="acts"><button class="btn" data-x>취소</button><button class="btn pri" data-ok>가져오기</button></div>`, { wide: true });
+  m.querySelector('[data-x]').onclick = closeModal;
+  m.querySelector('[data-ok]').onclick = () => {
+    const ovr = $('#rovr', m).checked, doAdd = $('#radd', m).checked;
+    let nA = 0, nU = 0;
+    if (doAdd) for (const x of add) { const d = ensureDonor(x.name); d.mid = x.id; for (const k of F) if (x[k]) d[k] = String(x[k]).trim(); nA++; }
+    for (const u of upd) {
+      u.d.mid = u.m.id;
+      if (u.rename && !donorByName(u.m.name)) u.d.name = normName(u.m.name);
+      for (const k of u.ch) if (ovr || !u.d[k]) u.d[k] = String(u.m[k]).trim();
+      nU++;
+    }
+    for (const d of exHere) d.inactive = true;
+    db.settings.rollSyncedAt = now();
+    logAct(`교인명단 가져오기(${R.src}): 추가 ${nA}, 갱신 ${nU}, 숨김 ${exHere.length}`); save(true); closeModal(); render();
+    toast(`추가 ${nA}명 · 갱신 ${nU}명${exHere.length ? ` · 숨김 ${exHere.length}명` : ''}`);
+  };
+}
 
 /* ======================= 가져오기 ======================= */
 VIEWS.import = () => {
@@ -534,7 +587,8 @@ function previewImport(P) {
   ${unk.length ? `<p><span class="pill bad">계정과목에 없는 이름</span> ${unk.map(esc).join(', ')} — 가져온 뒤 설정에서 계정을 추가하거나 기록을 고치세요.</p>` : ''}
   ${dates.length ? `<div class="tbl-wrap" style="max-height:42vh"><table><thead><tr><th><input type="checkbox" id="iall"></th><th>주일</th><th class="num">파일 인원</th><th class="num">파일 합계</th><th class="num">앱 현재</th><th>상태</th></tr></thead><tbody>
   ${dates.map((g, i) => `<tr><td><input type="checkbox" data-i="${i}" ${g.pick ? 'checked' : ''}></td><td>${dotDate(g.date)}${isSunday(g.date) ? '' : ' <span class="pill">주일 아님</span>'}</td><td class="num">${g.n}</td><td class="num">${won0(g.sum)}</td><td class="num muted">${g.curN ? won0(g.curSum) + ` (${g.curN}명)` : '-'}</td><td>${st[g.status]}</td></tr>`).join('')}</tbody></table></div>
-  <p class="hint">‘다름’은 앱에서 이미 입력·수정한 주일입니다. 기본으로 체크하지 않았습니다 — 체크하면 그 주일은 파일 내용으로 바뀝니다.</p>` : '<p class="muted">헌금 내역 없음</p>'}
+  <p class="hint">‘다름’은 앱에서 이미 입력·수정한 주일입니다. 기본으로 체크하지 않았습니다 — 체크하면 그 주일은 파일 내용으로 바뀝니다.</p>` : (P.donorInfo.length ? '' : '<p class="muted">헌금 내역 없음</p>')}
+  ${P.donorInfo.length ? (() => { const miss = P.donorInfo.filter(d => { const x = donorByName(d.name); return !x || x.anon; }); return `<p>주민번호 <b>${P.donorInfo.length - miss.length}명</b>을 헌금자 명단에 채웁니다.${miss.length ? ` <span class="pill warn">명단에 없는 이름 ${miss.length}명</span> <span class="muted">${miss.slice(0, 20).map(d => esc(d.name)).join(', ')}${miss.length > 20 ? ' …' : ''} — 새로 추가하지 않습니다. 헌금자 명단에서 이름을 맞춘 뒤 다시 올리세요.</span>` : ''}</p>`; })() : ''}
   ${(() => { const c = importNewCounts(P); return `<p>새로 들어올 것: 온라인 헌금 <b>${c.on}</b>건 · 기타수입 <b>${c.inc}</b>건 · 지출 <b>${c.exp}</b>건 · 현금입금 <b>${c.dep}</b>건${P.budgets.length ? ` · 예산 <b>${P.budgets.length}</b>항목(${[...new Set(P.budgets.map(b => b.year))].join(', ')}년)` : ''}${P.donors.length ? ` · 헌금자 정보 ${P.donors.length}명` : ''}${P.bank ? ` · 통장 잔액 ${won0(P.bank.balance)} (${esc(P.bank.time)})` : ''}</p>`; })()}
   <div class="acts"><button class="btn" data-x>취소</button><button class="btn pri" data-ok>가져오기</button></div>`, { wide: true });
   const all = $('#iall', m); if (all) all.onchange = () => $$('[data-i]', m).forEach(c => { c.checked = all.checked; dates[+c.dataset.i].pick = c.checked; });
@@ -543,7 +597,7 @@ function previewImport(P) {
   m.querySelector('[data-ok]').onclick = () => {
     const r = applyImport(P, dates, { accounts: $('#ia', m) ? $('#ia', m).checked : false, expAccounts: $('#iea', m) ? $('#iea', m).checked : false });
     closeModal(); render();
-    modal(`<h2>가져왔습니다</h2><dl class="kv"><dt>오프라인 헌금</dt><dd>${r.dates}주 (${r.rows}줄)</dd><dt>온라인 헌금</dt><dd>${r.online}건</dd><dt>현금입금</dt><dd>${r.deposits}건</dd><dt>새 헌금자</dt><dd>${r.newDonors}명</dd><dt>헌금자 정보</dt><dd>${r.donors}명</dd><dt>기타수입</dt><dd>${r.incomes}건</dd><dt>지출</dt><dd>${r.expenses}건</dd><dt>예산</dt><dd>${r.budgets}항목</dd></dl>
+    modal(`<h2>가져왔습니다</h2><dl class="kv">${r.rrn || r.rrnMiss.length ? `<dt>주민번호</dt><dd>${r.rrn}명 입력${r.rrnMiss.length ? ` · 명단에 없는 이름 ${r.rrnMiss.length}명: ${r.rrnMiss.map(esc).join(', ')}` : ''}</dd>` : ''}<dt>오프라인 헌금</dt><dd>${r.dates}주 (${r.rows}줄)</dd><dt>온라인 헌금</dt><dd>${r.online}건</dd><dt>현금입금</dt><dd>${r.deposits}건</dd><dt>새 헌금자</dt><dd>${r.newDonors}명</dd><dt>헌금자 정보</dt><dd>${r.donors}명</dd><dt>기타수입</dt><dd>${r.incomes}건</dd><dt>지출</dt><dd>${r.expenses}건</dd><dt>예산</dt><dd>${r.budgets}항목</dd></dl>
     <div class="acts"><button class="btn" data-x>닫기</button><button class="btn pri" data-h>현황 보기</button></div>`);
     $('[data-x]').onclick = closeModal; $('[data-h]').onclick = () => { closeModal(); go('home'); };
   };
@@ -613,6 +667,11 @@ VIEWS.settings = () => {
     </tbody></table></div>
     <div class="row" style="margin-top:10px"><select id="nat"><option>지출</option><option>수입</option></select><input type="text" id="nag" placeholder="관 (수입만)" style="width:120px"><input type="text" id="nam" placeholder="항 (수입만)" style="width:120px"><input type="text" id="nah" placeholder="목 / 항목 이름" style="width:170px"><input type="text" id="nacode" placeholder="번호" style="width:60px"><button class="btn" id="nab">계정 추가</button></div>
     <p class="hint">지출은 순위 번호 순서로, 수입은 관·항·목 순서로 예산서와 보고서에 나옵니다. 관이 ‘이월금’인 계정은 전년도 이월금으로 처리됩니다.</p></div>
+  <div class="panel" style="margin-top:16px"><h2>교적관리 시트 연결 (교인명단 읽기 전용)</h2>
+    <p class="muted" style="margin-top:-4px">출석부 앱 <b>설정·데이터</b> 화면의 웹앱 URL과 KEY를 그대로 붙여넣으세요. 재정 앱은 교인명단을 <b>읽기만</b> 하고, 헌금·주민번호는 시트로 보내지 않습니다.</p>
+    <div class="fgrid"><label class="f">웹앱 URL (…/exec)<input type="text" id="rurl" value="${esc(s.rollUrl || '')}" placeholder="https://script.google.com/macros/s/…/exec"></label>
+    <label class="f">KEY<input type="password" id="rkey" value="${esc(s.rollKey || '')}" autocomplete="off"></label></div>
+    <div class="row" style="margin-top:10px"><button class="btn" id="rtest">연결 확인</button><span class="hint" id="rmsg">${s.rollSyncedAt ? '마지막 가져오기 ' + new Date(s.rollSyncedAt).toLocaleString('ko-KR') : ''}</span></div></div>
   <div class="grid2" style="margin-top:16px">
   <div class="panel"><h2>프로그램 잠금</h2><p class="muted">${s.lockHash ? '켜져 있음 — 프로그램을 켤 때 비밀번호를 묻습니다.' : '꺼져 있음'}</p>
     <div class="row"><input type="password" id="lp" placeholder="새 비밀번호" autocomplete="new-password"><button class="btn" id="lpb">${s.lockHash ? '바꾸기' : '켜기'}</button>${s.lockHash ? '<button class="btn danger" id="lpo">끄기</button>' : ''}</div>
@@ -655,6 +714,14 @@ BIND.settings = () => {
     const nc = type === '지출' && !code ? String(db.accounts.filter(a => a.type === '지출').length + 1) : code;
     db.accounts.splice(at + 1, 0, { id: uid(), type, gwan, mid, code: nc, hang, kinds: [], receipt: type === '수입' && /^[123]\./.test(gwan), note: '' });
     save(); render();
+  };
+  $('#rurl').onchange = e => { s.rollUrl = e.target.value.trim(); save(); };
+  $('#rkey').onchange = e => { s.rollKey = e.target.value.trim(); save(); };
+  $('#rtest').onclick = async () => {
+    s.rollUrl = $('#rurl').value.trim(); s.rollKey = $('#rkey').value.trim(); save();
+    const el = $('#rmsg'); el.textContent = '확인 중…';
+    try { const R = await fetchRoll(); el.textContent = `연결됨 — 교인 ${R.members.length}명. 헌금자 명단에서 ‘교적관리 시트에서 가져오기’를 누르세요.`; }
+    catch (e) { el.textContent = '연결 실패: ' + e.message; }
   };
   $('#lpb').onclick = async () => { const p = $('#lp').value; if (p.length < 4) return toast('4자 이상 입력하세요'); s.lockHash = await sha256(p); save(true); toast('잠금 비밀번호를 설정했습니다'); render(); };
   const lpo = $('#lpo'); if (lpo) lpo.onclick = async () => { if (await confirmBox('프로그램 잠금을 끌까요?', '끄기')) { s.lockHash = ''; save(true); render(); } };
