@@ -68,6 +68,10 @@ function weeklyRows(date, all) {
 }
 const onlineSum = date => offeringsOn(date, 'on').reduce((s, o) => s + rowTotal(o), 0);
 const depositSum = date => db.deposits.filter(x => x.date === date).reduce((s, x) => s + x.amount, 0);
+/** 현금지출: 증빙 '현금' 지출 — 받은 헌금(현금)에서 바로 쓴 돈. 주일이 아닌 날짜는 그 앞 주일로 묶음 */
+const cashWeek = x => isSunday(x.date) ? x.date : lastSunday(x.date);
+const cashExpList = date => db.expenses.filter(x => x.proof === '현금' && (x.date === date || cashWeek(x) === date));
+const cashExpSum = date => cashExpList(date).reduce((s, x) => s + x.amount, 0);
 function weeklyXLSX(date, all) {
   const C = weekKinds(date), rows = weeklyRows(date, all), ch = db.settings.church;
   const W = 3 + C.length + 1;
@@ -182,7 +186,7 @@ function quarterData(y, q) {
   const pi = gsTotal(inc, 'per'), pe = gsTotal(exp, 'per');
   const sundays = offeringDates().filter(d => inRange(d, from, to)).map(d => {
     const off = offeringsOn(d, 'off').reduce((s, o) => s + rowTotal(o), 0), on = onlineSum(d);
-    return { date: d, off, on, dep: depositSum(d) };
+    return { date: d, off, on, dep: depositSum(d), cx: cashExpSum(d) };
   });
   return { y, q, from, to, inc, exp, open, pi, pe, close: open + pi - pe, sundays };
 }
@@ -195,8 +199,9 @@ function quarterPDF(y, q) {
   <h2>2. 수입부</h2>${incomeTableHTML(Q.inc, C, '총 수 입')}</div>
   <div class="page"><h2>3. 지출부</h2>${expenseTableHTML(Q.exp, C, '지출 합계')}</div>
   <div class="page"><h2>4. 주일별 헌금</h2>
-  <table style="font-size:9pt"><tr><th>주일</th><th>오프라인</th><th>현금입금(통장)</th><th>차이</th><th>온라인</th><th>합계</th></tr>
-  ${Q.sundays.map(s => `<tr><td class="c">${dotDate(s.date)}</td>${n(s.off)}${n(s.dep)}${n(s.off - s.dep)}${n(s.on)}${n(s.off + s.on)}</tr>`).join('') || '<tr><td colspan="6" class="c">기록 없음</td></tr>'}</table>
+  <table style="font-size:9pt"><tr><th>주일</th><th>오프라인</th><th>현금입금(통장)</th><th>현금지출</th><th>차이</th><th>온라인</th><th>합계</th></tr>
+  ${Q.sundays.map(s => `<tr><td class="c">${dotDate(s.date)}</td>${n(s.off)}${n(s.dep)}${n(s.cx)}${n(s.off - s.dep - s.cx)}${n(s.on)}${n(s.off + s.on)}</tr>`).join('') || '<tr><td colspan="7" class="c">기록 없음</td></tr>'}</table>
+  <p class="note">※ 현금지출: 받은 현금 헌금에서 통장 입금 전에 바로 지출한 금액(증빙 ‘현금’). 차이 = 오프라인 − 현금입금 − 현금지출.</p>
   <p class="note">※ 집행률은 1월 1일부터 ${dotDate(Q.to)}까지 누계 기준. 정관 제43조 2항에 따라 분기별로 제직회에 보고합니다.</p>
   <div class="sign"><span>재정부장 : ${esc(ch.treasurer || '')}</span><span>(인)</span></div></div>`;
   return docHTML(`${y}년 ${q}분기 재정보고`, body, { fs: 10 });
@@ -208,7 +213,7 @@ function quarterXLSX(y, q) {
   const w1 = makeSheet(head, { widths: [15, 15, 15, 15] });
   const w2 = makeSheet(ia, { widths: [12, 12, 26, 14, 14, 14, 9] }); pctFormat(w2, ia, C, 3);
   const w3 = makeSheet(ea, { widths: [6, 22, 14, 14, 14, 9, 24] }); pctFormat(w3, ea, C, 2);
-  const w4 = makeSheet([['주일', '오프라인', '현금입금(통장)', '차이', '온라인', '합계'], ...Q.sundays.map((s, i) => [s.date, s.off, s.dep, { f: `B${i + 2}-C${i + 2}` }, s.on, { f: `B${i + 2}+E${i + 2}` }])], { widths: [12, 14, 14, 12, 14, 14] });
+  const w4 = makeSheet([['주일', '오프라인', '현금입금(통장)', '현금지출', '차이', '온라인', '합계'], ...Q.sundays.map((s, i) => [s.date, s.off, s.dep, s.cx || null, { f: `B${i + 2}-C${i + 2}-D${i + 2}` }, s.on, { f: `B${i + 2}+F${i + 2}` }])], { widths: [12, 14, 14, 12, 12, 14, 14] });
   return book([['요약', w1], ['수입부', w2], ['지출부', w3], ['주일별', w4]]);
 }
 
