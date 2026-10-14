@@ -578,7 +578,7 @@ function previewImport(P) {
   const unk = unknownAccounts(P);
   const nd = new Set(P.offerings.map(o => o.name.replace(/\s/g, '')).filter(n => !donorByName(n) && !/^무명/.test(n)));
   P.donors.forEach(d => { if (!donorByName(d.name)) nd.add(d.name.replace(/\s/g, '')); });
-  const st = { new: '<span class="pill ok">새 주일</span>', same: '<span class="pill">같음</span>', diff: '<span class="pill warn">다름</span>' };
+  const st = { new: '<span class="pill ok">새 주일</span>', same: '<span class="pill">같음</span>', diff: '<span class="pill warn">다름</span>', fix: '<span class="pill info">정리</span>' };
   const m = modal(`<h2>가져오기 미리보기</h2><p class="muted">${esc(P.src)} — ${P.sheets.map(esc).join(' · ') || '읽은 내용 없음'}</p>
   ${P.warn.length ? `<div class="banner warn" style="display:block"><b>확인할 점</b><ul style="margin:6px 0 0;padding-left:18px">${[...new Set(P.warn)].slice(0, 12).map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}
   ${nd.size ? `<p>새 헌금자 <b>${nd.size}명</b>이 명단에 추가됩니다: <span class="muted">${[...nd].slice(0, 30).map(esc).join(', ')}${nd.size > 30 ? ' …' : ''}</span></p>` : ''}
@@ -587,6 +587,7 @@ function previewImport(P) {
   ${unk.length ? `<p><span class="pill bad">계정과목에 없는 이름</span> ${unk.map(esc).join(', ')} — 가져온 뒤 설정에서 계정을 추가하거나 기록을 고치세요.</p>` : ''}
   ${dates.length ? `<div class="tbl-wrap" style="max-height:42vh"><table><thead><tr><th><input type="checkbox" id="iall"></th><th>주일</th><th class="num">파일 인원</th><th class="num">파일 합계</th><th class="num">앱 현재</th><th>상태</th></tr></thead><tbody>
   ${dates.map((g, i) => `<tr><td><input type="checkbox" data-i="${i}" ${g.pick ? 'checked' : ''}></td><td>${dotDate(g.date)}${isSunday(g.date) ? '' : ' <span class="pill">주일 아님</span>'}</td><td class="num">${g.n}</td><td class="num">${won0(g.sum)}</td><td class="num muted">${g.curN ? won0(g.curSum) + ` (${g.curN}명)` : '-'}</td><td>${st[g.status]}</td></tr>`).join('')}</tbody></table></div>
+  ${dates.some(g => g.status === 'fix') ? `<p class="hint"><span class="pill info">정리</span> 주차·회비·찬조 같은 현금 헌금이 ‘기타수입’에 따로 들어가 있던 주일입니다. 금액은 같고, 주일 헌금 쪽으로 옮겨 집계표·현금입금 대조에 포함합니다(기본 체크).</p>` : ''}
   <p class="hint">‘다름’은 앱에서 이미 입력·수정한 주일입니다. 기본으로 체크하지 않았습니다 — 체크하면 그 주일은 파일 내용으로 바뀝니다.</p>` : (P.donorInfo.length ? '' : '<p class="muted">헌금 내역 없음</p>')}
   ${P.donorInfo.length ? (() => { const miss = P.donorInfo.filter(d => { const x = donorByName(d.name); return !x || x.anon; }); return `<p>주민번호 <b>${P.donorInfo.length - miss.length}명</b>을 헌금자 명단에 채웁니다.${miss.length ? ` <span class="pill warn">명단에 없는 이름 ${miss.length}명</span> <span class="muted">${miss.slice(0, 20).map(d => esc(d.name)).join(', ')}${miss.length > 20 ? ' …' : ''} — 새로 추가하지 않습니다. 헌금자 명단에서 이름을 맞춘 뒤 다시 올리세요.</span>` : ''}</p>`; })() : ''}
   ${(() => { const c = importNewCounts(P); return `<p>새로 들어올 것: 온라인 헌금 <b>${c.on}</b>건 · 기타수입 <b>${c.inc}</b>건 · 지출 <b>${c.exp}</b>건 · 현금입금 <b>${c.dep}</b>건${P.budgets.length ? ` · 예산 <b>${P.budgets.length}</b>항목(${[...new Set(P.budgets.map(b => b.year))].join(', ')}년)` : ''}${P.donors.length ? ` · 헌금자 정보 ${P.donors.length}명` : ''}${P.bank ? ` · 통장 잔액 ${won0(P.bank.balance)} (${esc(P.bank.time)})` : ''}</p>`; })()}
@@ -597,7 +598,7 @@ function previewImport(P) {
   m.querySelector('[data-ok]').onclick = () => {
     const r = applyImport(P, dates, { accounts: $('#ia', m) ? $('#ia', m).checked : false, expAccounts: $('#iea', m) ? $('#iea', m).checked : false });
     closeModal(); render();
-    modal(`<h2>가져왔습니다</h2><dl class="kv">${r.rrn || r.rrnMiss.length ? `<dt>주민번호</dt><dd>${r.rrn}명 입력${r.rrnMiss.length ? ` · 명단에 없는 이름 ${r.rrnMiss.length}명: ${r.rrnMiss.map(esc).join(', ')}` : ''}</dd>` : ''}<dt>오프라인 헌금</dt><dd>${r.dates}주 (${r.rows}줄)</dd><dt>온라인 헌금</dt><dd>${r.online}건</dd><dt>현금입금</dt><dd>${r.deposits}건</dd><dt>새 헌금자</dt><dd>${r.newDonors}명</dd><dt>헌금자 정보</dt><dd>${r.donors}명</dd><dt>기타수입</dt><dd>${r.incomes}건</dd><dt>지출</dt><dd>${r.expenses}건</dd><dt>예산</dt><dd>${r.budgets}항목</dd></dl>
+    modal(`<h2>가져왔습니다</h2><dl class="kv">${r.rrn || r.rrnMiss.length ? `<dt>주민번호</dt><dd>${r.rrn}명 입력${r.rrnMiss.length ? ` · 명단에 없는 이름 ${r.rrnMiss.length}명: ${r.rrnMiss.map(esc).join(', ')}` : ''}</dd>` : ''}<dt>오프라인 헌금</dt><dd>${r.dates}주 (${r.rows}줄)${r.fixed ? ` · 기타수입에서 옮김 ${r.fixed}건` : ''}</dd><dt>온라인 헌금</dt><dd>${r.online}건</dd><dt>현금입금</dt><dd>${r.deposits}건</dd><dt>새 헌금자</dt><dd>${r.newDonors}명</dd><dt>헌금자 정보</dt><dd>${r.donors}명</dd><dt>기타수입</dt><dd>${r.incomes}건</dd><dt>지출</dt><dd>${r.expenses}건</dd><dt>예산</dt><dd>${r.budgets}항목</dd></dl>
     <div class="acts"><button class="btn" data-x>닫기</button><button class="btn pri" data-h>현황 보기</button></div>`);
     $('[data-x]').onclick = closeModal; $('[data-h]').onclick = () => { closeModal(); go('home'); };
   };

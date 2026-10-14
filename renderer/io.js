@@ -214,13 +214,16 @@ function parseLedger(rows, hi, sn, out) {
     }
     if (!inAmt) return;
     const a = accOfKind(kind);
-    if (!kind || (a && !a.receipt)) {             // 헌금 아닌 수입 또는 종류 빈칸 → 기타수입
+    const offline = ch === '오프라인' || (!time && ch !== '온라인');   // 거래일시 없는 줄 = 손으로 적은 오프라인 헌금
+    // 오프라인(현금)은 종류와 상관없이 주일 헌금으로 — 주차·회비·찬조도 그 주일 현금 합계·현금입금 대조에 들어가야 함
+    if (!offline && (!kind || (a && !a.receipt))) {   // 온라인: 헌금 아닌 수입 또는 종류 빈칸 → 기타수입
       out.incomes.push({ date, time, kind, acc: '', amount: inAmt, memo, key: key || [date, memo, inAmt, kind, i].join('|') });
       if (!kind) counts.nokind++; counts.inc++; return;
     }
-    if (ch === '오프라인' || (!time && ch !== '온라인')) {   // 거래일시 없는 줄 = 손으로 적은 오프라인 헌금
+    if (offline) {
       const nm = /^무명/.test(memo.replace(/\s/g, '')) ? '무명' : (memo || '무명');
-      off.push({ date, name: nm, no: 0, a: { [kind]: inAmt }, memo: '', note: '', ch: 'off' }); counts.off++;
+      if (!kind) counts.nokind++;
+      off.push({ date, name: nm, no: 0, a: { [kind || '미분류']: inAmt }, memo: '', note: '', ch: 'off' }); counts.off++;
     } else {
       const nm = donorNameFrom(memo, known) || '무명';
       out.offerings.push({ date, name: nm, no: 0, a: { [kind]: inAmt }, memo: nm === '무명' || memo.replace(/\s/g, '') !== nm ? memo : '', note: '', ch: 'on', key: key || [date, memo, inAmt, kind, i].join('|') }); counts.on++;
@@ -297,6 +300,8 @@ const thisYearGuess = () => new Date().getFullYear();
 function readWorkbook(bytes) { return XLSX.read(bytes, { type: 'array', cellDates: true }); }
 
 /** 미리보기 → 적용 */
+/** v0.2.3 이전: 오프라인 주차·회비·찬조 등이 기타수입으로 들어간 것 */
+const legacyOffIncomes = date => db.incomes.filter(x => x.date === date && !x.time && x.kind && x.key && x.key.startsWith(date + '|'));
 function importPreview(P) {
   const byDate = new Map();
   for (const o of P.offerings.filter(o => o.ch !== 'on')) {
@@ -306,8 +311,9 @@ function importPreview(P) {
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)).map(g => {
     const cur = offeringsOn(g.date, 'off');
     g.curN = cur.length; g.curSum = cur.reduce((s, o) => s + rowTotal(o), 0);
-    g.status = !cur.length ? 'new' : g.curSum === g.sum && cur.length === g.n ? 'same' : 'diff';
-    g.pick = g.status === 'new';
+    g.legacy = legacyOffIncomes(g.date); const lg = g.legacy.reduce((s, x) => s + x.amount, 0);
+    g.status = !cur.length ? 'new' : g.curSum === g.sum && cur.length === g.n ? 'same' : (g.legacy.length && g.curSum + lg === g.sum ? 'fix' : 'diff');
+    g.pick = g.status === 'new' || g.status === 'fix';
     return g;
   });
 }
@@ -347,6 +353,7 @@ function applyImport(P, dates, opt = {}) {
   }
   for (const g of dates.filter(g => g.pick)) {
     db.offerings = db.offerings.filter(o => !(o.date === g.date && o.ch === 'off'));
+    const lg = legacyOffIncomes(g.date); if (lg.length) { db.incomes = db.incomes.filter(x => !lg.includes(x)); res.fixed = (res.fixed || 0) + lg.length; }
     for (const o of g.rows) {
       const d = ensureDonor(o.name);
       db.offerings.push({ id: uid(), date: o.date, donorId: d.id, ch: 'off', a: o.a, memo: o.memo || '', note: o.note || '', t: now() });
