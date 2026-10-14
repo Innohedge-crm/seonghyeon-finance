@@ -124,7 +124,9 @@ function normRRN(v) {
 const rrnOk = v => /^\d{6}-\d{7}$/.test(v || '');
 const normName = s => String(s || '').replace(/\s+/g, ' ').trim();
 const donorByName = n => { const k = normName(n).replace(/\s/g, ''); return db.donors.find(d => d.name.replace(/\s/g, '') === k); };
-const activeDonors = () => db.donors.filter(d => !d.inactive).sort((a, b) => (a.anon - b.anon) || (a.no - b.no) || a.name.localeCompare(b.name, 'ko'));
+/** 정렬: 가나다순(기본) 또는 번호순. 무명은 항상 맨 아래 */
+const donorCmp = (a, b) => (a.anon - b.anon) || ((db.settings.sortBy || 'name') === 'name' ? a.name.localeCompare(b.name, 'ko') : ((a.no - b.no) || a.name.localeCompare(b.name, 'ko')));
+const activeDonors = () => db.donors.filter(d => !d.inactive).sort(donorCmp);
 const accByHang = h => db.accounts.find(a => a.hang === h);
 const normKind = k => String(k || '').replace(/\s+/g, ' ').trim();
 const accOfKind = k => { k = normKind(k); return k ? db.accounts.find(a => a.kinds.includes(k)) : null; };

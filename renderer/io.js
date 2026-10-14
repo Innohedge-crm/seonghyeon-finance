@@ -308,22 +308,38 @@ function importPreview(P) {
     let g = byDate.get(o.date); if (!g) byDate.set(o.date, g = { date: o.date, n: 0, sum: 0, rows: [] });
     g.n++; g.sum += Object.values(o.a).reduce((s, v) => s + v, 0); g.rows.push(o);
   }
+  const nk = n => /^무명/.test(String(n).replace(/\s/g, '')) ? '무명' : String(n).replace(/\s/g, '');
+  const add = (m, name, kind, v) => { if (!v) return; const k = nk(name) + '|' + kind; m.set(k, (m.get(k) || 0) + v); };
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)).map(g => {
     const cur = offeringsOn(g.date, 'off');
     g.curN = cur.length; g.curSum = cur.reduce((s, o) => s + rowTotal(o), 0);
-    g.legacy = legacyOffIncomes(g.date); const lg = g.legacy.reduce((s, x) => s + x.amount, 0);
-    g.status = !cur.length ? 'new' : g.curSum === g.sum && cur.length === g.n ? 'same' : (g.legacy.length && g.curSum + lg === g.sum ? 'fix' : 'diff');
+    g.legacy = legacyOffIncomes(g.date);
+    // 이름·종류·금액을 한 칸씩 비교 (합계만 같아도 '같음'으로 보지 않음)
+    const F = new Map(), C = new Map();
+    for (const o of g.rows) for (const [k, v] of Object.entries(o.a)) add(F, o.name, k, v);
+    for (const o of cur) { const d = donorById(o.donorId); for (const [k, v] of Object.entries(o.a)) add(C, d ? d.name : '?', k, v); }
+    const CL = new Map(C); for (const x of g.legacy) add(CL, x.memo || '무명', x.kind, x.amount);
+    const diff = (A, B) => [...new Set([...A.keys(), ...B.keys()])].filter(k => (A.get(k) || 0) !== (B.get(k) || 0))
+      .map(k => { const [n, kind] = k.split('|'); return { name: n, kind, from: B.get(k) || 0, to: A.get(k) || 0 }; });
+    g.changes = diff(F, C);
+    g.status = !cur.length ? 'new' : !g.changes.length ? 'same' : (g.legacy.length && !diff(F, CL).length ? 'fix' : 'diff');
     g.pick = g.status === 'new' || g.status === 'fix';
     return g;
   });
 }
+/** 거래일시가 있는 줄의 '느슨한 키'(내용 빼고 일시·금액만) — 엑셀에서 내용·이름만 고친 거래를 같은 거래로 알아봄 */
+const looseKey = k => { if (!k || !/^\d{4}-\d{2}-\d{2} \d/.test(k)) return null; const p = k.split('|'); return p.length >= 5 ? p[0] + '|' + p.slice(-3).join('|') : null; };
 const haveKeys = () => { const k = new Set(); for (const o of db.offerings) for (const x of o.keys || []) k.add(x); return k; };
 const keyOf = x => x.key || [x.date, x.acc || x.kind, x.amount, x.memo].join('|');
-/** 새로 들어올 온라인 헌금·기타수입·지출·현금입금 개수 */
+/** 새로 들어올 / 고쳐진 온라인 헌금·기타수입·지출·현금입금 개수 */
 function importNewCounts(P) {
-  const ok = haveKeys(), ki = new Set(db.incomes.map(keyOf)), ke = new Set(db.expenses.map(keyOf)), kd = new Set(db.deposits.map(keyOf));
-  return { on: P.offerings.filter(o => o.ch === 'on' && !ok.has(o.key)).length, inc: P.incomes.filter(x => !ki.has(keyOf(x))).length,
-    exp: P.expenses.filter(x => !ke.has(keyOf(x))).length, dep: P.deposits.filter(x => !kd.has(keyOf(x))).length };
+  const ok = haveKeys(), okL = new Set([...ok].map(looseKey).filter(Boolean));
+  const sets = L => { const f = new Set(L.map(keyOf)); return { f, l: new Set([...f].map(looseKey).filter(Boolean)) }; };
+  const I = sets(db.incomes), E = sets(db.expenses), D = sets(db.deposits);
+  const cnt = (list, S, kf) => { let n = 0, u = 0; for (const x of list) { const k = kf(x); if (S.f.has(k)) continue; const lk = looseKey(k); if (lk && S.l.has(lk)) u++; else n++; } return [n, u]; };
+  const [on, onU] = cnt(P.offerings.filter(o => o.ch === 'on'), { f: ok, l: okL }, o => o.key);
+  const [inc, incU] = cnt(P.incomes, I, keyOf), [exp, expU] = cnt(P.expenses, E, keyOf), [dep, depU] = cnt(P.deposits, D, keyOf);
+  return { on, inc, exp, dep, upd: onU + incU + expU + depU };
 }
 
 function applyImport(P, dates, opt = {}) {
@@ -362,23 +378,43 @@ function applyImport(P, dates, opt = {}) {
     res.dates++;
   }
   const ok = haveKeys();
+  res.updated = 0;
+  // 엑셀에서 고친 온라인 거래: 같은 일시·금액의 옛 기록을 빼고 새로 넣음
+  const byLoose = new Map(); for (const r of db.offerings) if (r.ch === 'on') for (const k of r.keys || []) { const lk = looseKey(k); if (lk) byLoose.set(lk, { r, k }); }
   for (const o of P.offerings.filter(o => o.ch === 'on' && !ok.has(o.key))) {
+    const lk = looseKey(o.key), hit = lk && byLoose.get(lk);
+    if (hit) {
+      const { r, k } = hit, amt = Object.values(o.a).reduce((s, v) => s + v, 0);
+      const old = (r.ka && r.ka[k]) || (() => { const kk = Object.keys(o.a)[0]; const pick = (r.a[kk] || 0) >= amt ? kk : Object.keys(r.a).find(x => (r.a[x] || 0) >= amt); return pick ? { [pick]: amt } : {}; })();
+      for (const [kk, v] of Object.entries(old)) { r.a[kk] = (r.a[kk] || 0) - v; if (r.a[kk] <= 0) delete r.a[kk]; }
+      r.keys = r.keys.filter(x => x !== k); if (r.ka) delete r.ka[k];
+      if (!Object.keys(r.a).length) db.offerings = db.offerings.filter(x => x !== r);
+      byLoose.delete(lk); res.updated++;
+    }
     const d = ensureDonor(o.name);
     let r = db.offerings.find(x => x.date === o.date && x.donorId === d.id && x.ch === 'on');
     if (!r) db.offerings.push(r = { id: uid(), date: o.date, donorId: d.id, ch: 'on', a: {}, memo: '', note: '', keys: [], t: now() });
     for (const [k, v] of Object.entries(o.a)) r.a[k] = (r.a[k] || 0) + v;
     if (o.memo && !(r.memo || '').includes(o.memo)) r.memo = [r.memo, o.memo].filter(Boolean).join(' / ');
-    (r.keys = r.keys || []).push(o.key); ok.add(o.key); res.online++;
+    (r.keys = r.keys || []).push(o.key); (r.ka = r.ka || {})[o.key] = { ...o.a }; ok.add(o.key); if (!hit) res.online++;
   }
   res.newDonors = Math.max(0, db.donors.length - before);
   for (const d of db.donors.slice(before)) if (GROUP_NAME.test(d.name)) d.group = true;
-  const ki = new Set(db.incomes.map(keyOf)), ke = new Set(db.expenses.map(keyOf)), kd = new Set(db.deposits.map(keyOf));
-  for (const x of P.incomes) if (!ki.has(keyOf(x))) { db.incomes.push({ id: uid(), t: now(), ...x, key: keyOf(x) }); ki.add(keyOf(x)); res.incomes++; }
-  for (const x of P.expenses) if (!ke.has(keyOf(x))) { db.expenses.push({ id: uid(), t: now(), ...x, key: keyOf(x) }); ke.add(keyOf(x)); res.expenses++; }
-  for (const x of P.deposits) if (!kd.has(keyOf(x))) { db.deposits.push({ id: uid(), ...x, key: keyOf(x) }); kd.add(keyOf(x)); res.deposits++; }
+  // 기타수입·지출·현금입금: 새 거래는 추가, 일시·금액이 같고 내용·계정만 고친 거래는 그 자리에서 고침
+  const merge = (list, src, field, extra) => {
+    const full = new Set(list.map(keyOf)), loose = new Map(); for (const x of list) { const lk = looseKey(keyOf(x)); if (lk) loose.set(lk, x); }
+    for (const x of src) {
+      const k = keyOf(x); if (full.has(k)) continue;
+      const hit = looseKey(k) && loose.get(looseKey(k));
+      if (hit) { const keep = { id: hit.id, proof: hit.proof, approve: hit.approve, payee: hit.payee }; Object.assign(hit, x, { key: k, t: now() }); for (const [a, v] of Object.entries(keep)) if (v) hit[a] = v; loose.delete(looseKey(k)); res.updated++; }
+      else { list.push({ id: uid(), ...(extra ? { t: now() } : {}), ...x, key: k }); res[field]++; }
+      full.add(k);
+    }
+  };
+  merge(db.incomes, P.incomes, 'incomes', true); merge(db.expenses, P.expenses, 'expenses', true); merge(db.deposits, P.deposits, 'deposits', false);
   for (const b of P.budgets) { (db.budgets[b.year] = db.budgets[b.year] || {})[b.hang] = b.amount; res.budgets++; }
   if (P.bank && (!db.bank || P.bank.time >= db.bank.time)) db.bank = P.bank;
-  logAct(`가져오기(${P.src}): 오프라인 주일 ${res.dates}개 ${res.rows}줄, 온라인 ${res.online}건, 새 헌금자 ${res.newDonors}명, 기타수입 ${res.incomes}, 지출 ${res.expenses}, 현금입금 ${res.deposits}, 예산 ${res.budgets}${res.rrn ? `, 주민번호 ${res.rrn}명` : ''}`);
+  logAct(`가져오기(${P.src}): 오프라인 주일 ${res.dates}개 ${res.rows}줄, 온라인 ${res.online}건, 새 헌금자 ${res.newDonors}명, 기타수입 ${res.incomes}, 지출 ${res.expenses}, 현금입금 ${res.deposits}, 고친 거래 ${res.updated}, 예산 ${res.budgets}${res.rrn ? `, 주민번호 ${res.rrn}명` : ''}`);
   save(true);
   return res;
 }

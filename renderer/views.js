@@ -100,6 +100,7 @@ VIEWS.week = () => {
   ${on.length || dep ? `<div class="banner"><span>이 주 온라인 입금 ${on.length}명 ${won0(onSum)}원 (별도 집계)${dep ? ` · 현금입금(통장) ${won0(dep)}원 — 오프라인 합계와 ${dep === grand ? '<b>일치</b>' : `<b>${won0(grand - dep)}원 차이</b>`}` : ''}</span></div>` : ''}
   ${!isSunday(d) ? `<div class="banner warn"><span>${korDate(d)}은 주일이 아닙니다. 절기·특별예배 헌금이면 그대로 입력하셔도 됩니다.</span></div>` : ''}
   <div class="toolbar"><div class="seg"><button data-all="1" aria-pressed="${all}">전체 명단</button><button data-all="0" aria-pressed="${!all}">헌금한 사람만</button></div>
+  <div class="seg"><button data-sort="name" aria-pressed="${(db.settings.sortBy || 'name') === 'name'}">가나다순</button><button data-sort="no" aria-pressed="${db.settings.sortBy === 'no'}">번호순</button></div>
   <input type="search" id="addname" placeholder="이름 입력 후 Enter — 명단에 없으면 새로 추가" class="grow" list="dnames">
   <datalist id="dnames">${db.donors.map(x => `<option value="${esc(x.name)}">`).join('')}</datalist>
   <select id="wxk" title="이 화면에 헌금종류 열 추가"><option value="">+ 열 추가 (부활·맥추 등)</option>${db.accounts.filter(x => x.receipt || x.kinds.length).flatMap(x => x.kinds).filter(k => !C.includes(k)).map(k => `<option>${esc(k)}</option>`).join('')}</select>
@@ -139,6 +140,7 @@ BIND.week = () => {
   $('#wd').onchange = e => e.target.value && go('week', { date: e.target.value });
   $$('[data-mv]').forEach(b => b.onclick = () => go('week', { date: addDays(isSunday(S.date) ? S.date : lastSunday(S.date), +b.dataset.mv) }));
   $('#wxk').onchange = e => { if (e.target.value) { S.wx = [...(S.wx || []), e.target.value]; render(); } };
+  $$('[data-sort]').forEach(b => b.onclick = () => { db.settings.sortBy = b.dataset.sort; save(); render(); });
   $$('[data-all]').forEach(b => b.onclick = () => { db.settings.showAllDonors = b.dataset.all === '1'; save(); render(); });
   $$('[data-out]').forEach(b => b.onclick = async () => {
     const all = db.settings.showAllDonors;
@@ -425,12 +427,12 @@ BIND.reports = () => {
 VIEWS.donors = () => {
   const q = S.dq.trim();
   const y = S.year;
-  const list = db.donors.slice().sort((a, b) => (a.anon - b.anon) || (!!a.inactive - !!b.inactive) || (a.no - b.no));
+  const list = db.donors.slice().sort((a, b) => (!!a.inactive - !!b.inactive) || donorCmp(a, b));
   const tot = id => db.offerings.filter(o => o.donorId === id && yearOf(o.date) === y).reduce((s, o) => s + rowTotal(o), 0);
   const cnt = id => new Set(db.offerings.filter(o => o.donorId === id && yearOf(o.date) === y).map(o => o.date)).size;
   return `<div class="head"><div><h1>헌금자 명단</h1><p>${db.donors.filter(d => !d.anon && !d.inactive).length}명 (무명 제외) · 주민번호 ${db.donors.filter(d => rrnOk(d.rrn)).length}명 입력 · 주민번호는 기부금영수증에만 쓰이고 이 PC에만 저장됩니다</p></div>
   <div class="row"><button class="btn" id="roll">교적관리 시트에서 가져오기</button><button class="btn" id="rrnf">주민번호 엑셀 불러오기</button><button class="btn pri" id="addd">+ 헌금자</button></div></div>
-  <div class="toolbar"><input type="search" id="dq" placeholder="이름 검색" value="${esc(q)}">${yearSel('dy', y)}<span class="hint">번호 순서가 주간 집계표 순서입니다.</span></div>
+  <div class="toolbar"><input type="search" id="dq" placeholder="이름 검색 (초성 가능)" value="${esc(q)}">${yearSel('dy', y)}<div class="seg"><button data-sort="name" aria-pressed="${(db.settings.sortBy || 'name') === 'name'}">가나다순</button><button data-sort="no" aria-pressed="${db.settings.sortBy === 'no'}">번호순</button></div><span class="hint">이 정렬이 주일 입력 화면·주간 집계표 순서가 됩니다.</span></div>
   <div class="tbl-wrap"><table><thead><tr><th class="num">번호</th><th>이름</th><th>직분</th><th>연락처</th><th>주소</th><th>주민번호</th><th class="num">${y} 주일수</th><th class="num">${y} 합계</th><th></th></tr></thead><tbody>
   ${list.map(d => `<tr class="click" data-id="${d.id}" data-nm="${esc(d.name)}" ${q && !nameMatch(d.name, q) ? 'hidden' : ''}><td class="num">${d.anon ? '' : d.no}</td><td><b>${esc(d.name)}</b>${d.inactive ? ' <span class="pill">숨김</span>' : ''}</td><td>${esc(d.title || '')}</td><td>${esc(d.phone || '')}</td><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis">${esc(d.address || '')}</td><td>${d.rrn ? esc(String(d.rrn).slice(0, 8)) + '******' : ''}</td><td class="num">${cnt(d.id) || ''}</td><td class="num">${won(tot(d.id))}</td><td></td></tr>`).join('')}
   </tbody></table></div>`;
@@ -486,6 +488,7 @@ BIND.donors = () => {
   // 화면을 다시 그리지 않고 줄만 숨김 — 한글 조합 중 입력창이 바뀌면 'ㄱㄱ'처럼 글자가 겹쳐 들어감
   const dq = $('#dq'); dq.oninput = () => { S.dq = dq.value; const q = dq.value.trim(); $$('tr[data-nm]').forEach(tr => { tr.hidden = !!q && !nameMatch(tr.dataset.nm, q); }); };
   $('#dy').onchange = e => go('donors', { year: +e.target.value });
+  $$('[data-sort]').forEach(b => b.onclick = () => { db.settings.sortBy = b.dataset.sort; save(); render(); });
   $('#addd').onclick = () => donorForm();
   $$('tr[data-id]').forEach(tr => tr.onclick = () => donorForm(donorById(tr.dataset.id)));
   $('#roll').onclick = rollImport;
@@ -586,19 +589,22 @@ function previewImport(P) {
   ${P.expAccounts ? `<label style="display:flex;gap:8px;margin:8px 0"><input type="checkbox" id="iea" checked> 지출 항목을 이 예산서의 ${P.expAccounts.length}개 항목·순위·비고로 맞추기</label>` : ''}
   ${unk.length ? `<p><span class="pill bad">계정과목에 없는 이름</span> ${unk.map(esc).join(', ')} — 가져온 뒤 설정에서 계정을 추가하거나 기록을 고치세요.</p>` : ''}
   ${dates.length ? `<div class="tbl-wrap" style="max-height:42vh"><table><thead><tr><th><input type="checkbox" id="iall"></th><th>주일</th><th class="num">파일 인원</th><th class="num">파일 합계</th><th class="num">앱 현재</th><th>상태</th></tr></thead><tbody>
-  ${dates.map((g, i) => `<tr><td><input type="checkbox" data-i="${i}" ${g.pick ? 'checked' : ''}></td><td>${dotDate(g.date)}${isSunday(g.date) ? '' : ' <span class="pill">주일 아님</span>'}</td><td class="num">${g.n}</td><td class="num">${won0(g.sum)}</td><td class="num muted">${g.curN ? won0(g.curSum) + ` (${g.curN}명)` : '-'}</td><td>${st[g.status]}</td></tr>`).join('')}</tbody></table></div>
+  ${dates.map((g, i) => `<tr><td><input type="checkbox" data-i="${i}" ${g.pick ? 'checked' : ''}></td><td>${dotDate(g.date)}${isSunday(g.date) ? '' : ' <span class="pill">주일 아님</span>'}</td><td class="num">${g.n}</td><td class="num">${won0(g.sum)}</td><td class="num muted">${g.curN ? won0(g.curSum) + ` (${g.curN}명)` : '-'}</td><td>${st[g.status]}</td></tr>
+  ${g.status === 'diff' ? `<tr><td></td><td colspan="5" style="white-space:normal;font-size:13px;color:var(--muted);padding-top:0">${g.changes.slice(0, 12).map(c => `${esc(c.name)} ${esc(c.kind)} <b style="color:var(--fg)">${c.from ? won0(c.from) : '없음'} → ${c.to ? won0(c.to) : '없음'}</b>`).join(' · ')}${g.changes.length > 12 ? ` 외 ${g.changes.length - 12}건` : ''}</td></tr>` : ''}`).join('')}</tbody></table></div>
+  ${dates.some(g => g.status === 'diff') ? `<div class="row" style="margin-top:8px"><button class="btn sm" id="ipickdiff">‘다름’ 주일 모두 선택 (엑셀 내용으로 맞추기)</button><span class="hint">주일 헌금 입력 화면에서 직접 고친 주일이 있으면 그 주일은 빼고 고르세요.</span></div>` : ''}
   ${dates.some(g => g.status === 'fix') ? `<p class="hint"><span class="pill info">정리</span> 주차·회비·찬조 같은 현금 헌금이 ‘기타수입’에 따로 들어가 있던 주일입니다. 금액은 같고, 주일 헌금 쪽으로 옮겨 집계표·현금입금 대조에 포함합니다(기본 체크).</p>` : ''}
   <p class="hint">‘다름’은 앱에서 이미 입력·수정한 주일입니다. 기본으로 체크하지 않았습니다 — 체크하면 그 주일은 파일 내용으로 바뀝니다.</p>` : (P.donorInfo.length ? '' : '<p class="muted">헌금 내역 없음</p>')}
   ${P.donorInfo.length ? (() => { const miss = P.donorInfo.filter(d => { const x = donorByName(d.name); return !x || x.anon; }); return `<p>주민번호 <b>${P.donorInfo.length - miss.length}명</b>을 헌금자 명단에 채웁니다.${miss.length ? ` <span class="pill warn">명단에 없는 이름 ${miss.length}명</span> <span class="muted">${miss.slice(0, 20).map(d => esc(d.name)).join(', ')}${miss.length > 20 ? ' …' : ''} — 새로 추가하지 않습니다. 헌금자 명단에서 이름을 맞춘 뒤 다시 올리세요.</span>` : ''}</p>`; })() : ''}
-  ${(() => { const c = importNewCounts(P); return `<p>새로 들어올 것: 온라인 헌금 <b>${c.on}</b>건 · 기타수입 <b>${c.inc}</b>건 · 지출 <b>${c.exp}</b>건 · 현금입금 <b>${c.dep}</b>건${P.budgets.length ? ` · 예산 <b>${P.budgets.length}</b>항목(${[...new Set(P.budgets.map(b => b.year))].join(', ')}년)` : ''}${P.donors.length ? ` · 헌금자 정보 ${P.donors.length}명` : ''}${P.bank ? ` · 통장 잔액 ${won0(P.bank.balance)} (${esc(P.bank.time)})` : ''}</p>`; })()}
+  ${(() => { const c = importNewCounts(P); return `<p>새로 들어올 것: ${c.upd ? `<span class="pill info">엑셀에서 고친 거래 ${c.upd}건 반영</span> ` : ''}온라인 헌금 <b>${c.on}</b>건 · 기타수입 <b>${c.inc}</b>건 · 지출 <b>${c.exp}</b>건 · 현금입금 <b>${c.dep}</b>건${P.budgets.length ? ` · 예산 <b>${P.budgets.length}</b>항목(${[...new Set(P.budgets.map(b => b.year))].join(', ')}년)` : ''}${P.donors.length ? ` · 헌금자 정보 ${P.donors.length}명` : ''}${P.bank ? ` · 통장 잔액 ${won0(P.bank.balance)} (${esc(P.bank.time)})` : ''}</p>`; })()}
   <div class="acts"><button class="btn" data-x>취소</button><button class="btn pri" data-ok>가져오기</button></div>`, { wide: true });
   const all = $('#iall', m); if (all) all.onchange = () => $$('[data-i]', m).forEach(c => { c.checked = all.checked; dates[+c.dataset.i].pick = c.checked; });
   $$('[data-i]', m).forEach(c => c.onchange = () => dates[+c.dataset.i].pick = c.checked);
+  const pd = $('#ipickdiff', m); if (pd) pd.onclick = () => $$('[data-i]', m).forEach(c => { if (dates[+c.dataset.i].status === 'diff') { c.checked = true; dates[+c.dataset.i].pick = true; } });
   m.querySelector('[data-x]').onclick = closeModal;
   m.querySelector('[data-ok]').onclick = () => {
     const r = applyImport(P, dates, { accounts: $('#ia', m) ? $('#ia', m).checked : false, expAccounts: $('#iea', m) ? $('#iea', m).checked : false });
     closeModal(); render();
-    modal(`<h2>가져왔습니다</h2><dl class="kv">${r.rrn || r.rrnMiss.length ? `<dt>주민번호</dt><dd>${r.rrn}명 입력${r.rrnMiss.length ? ` · 명단에 없는 이름 ${r.rrnMiss.length}명: ${r.rrnMiss.map(esc).join(', ')}` : ''}</dd>` : ''}<dt>오프라인 헌금</dt><dd>${r.dates}주 (${r.rows}줄)${r.fixed ? ` · 기타수입에서 옮김 ${r.fixed}건` : ''}</dd><dt>온라인 헌금</dt><dd>${r.online}건</dd><dt>현금입금</dt><dd>${r.deposits}건</dd><dt>새 헌금자</dt><dd>${r.newDonors}명</dd><dt>헌금자 정보</dt><dd>${r.donors}명</dd><dt>기타수입</dt><dd>${r.incomes}건</dd><dt>지출</dt><dd>${r.expenses}건</dd><dt>예산</dt><dd>${r.budgets}항목</dd></dl>
+    modal(`<h2>가져왔습니다</h2><dl class="kv">${r.rrn || r.rrnMiss.length ? `<dt>주민번호</dt><dd>${r.rrn}명 입력${r.rrnMiss.length ? ` · 명단에 없는 이름 ${r.rrnMiss.length}명: ${r.rrnMiss.map(esc).join(', ')}` : ''}</dd>` : ''}<dt>오프라인 헌금</dt><dd>${r.dates}주 (${r.rows}줄)${r.fixed ? ` · 기타수입에서 옮김 ${r.fixed}건` : ''}</dd><dt>온라인 헌금</dt><dd>${r.online}건</dd>${r.updated ? `<dt>고친 거래</dt><dd>${r.updated}건</dd>` : ''}<dt>현금입금</dt><dd>${r.deposits}건</dd><dt>새 헌금자</dt><dd>${r.newDonors}명</dd><dt>헌금자 정보</dt><dd>${r.donors}명</dd><dt>기타수입</dt><dd>${r.incomes}건</dd><dt>지출</dt><dd>${r.expenses}건</dd><dt>예산</dt><dd>${r.budgets}항목</dd></dl>
     <div class="acts"><button class="btn" data-x>닫기</button><button class="btn pri" data-h>현황 보기</button></div>`);
     $('[data-x]').onclick = closeModal; $('[data-h]').onclick = () => { closeModal(); go('home'); };
   };

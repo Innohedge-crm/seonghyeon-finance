@@ -63,7 +63,7 @@ function weeklyRows(date, all) {
   let donors = all ? activeDonors() : [];
   for (const o of list) if (!donors.some(d => d.id === o.donorId)) donors.push(donorById(o.donorId));
   donors = donors.filter(Boolean);
-  if (!all) donors.sort((a, b) => (a.anon - b.anon) || (a.no - b.no));
+  donors.sort(donorCmp);
   return donors.map(d => ({ d, o: byD.get(d.id) }));
 }
 const onlineSum = date => offeringsOn(date, 'on').reduce((s, o) => s + rowTotal(o), 0);
