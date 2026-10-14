@@ -1,7 +1,7 @@
 {
   "name": "seonghyeon-finance",
   "productName": "성현교회 재정",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "성현교회 주일 헌금 현황 및 연간 예결산",
   "main": "main.js",
   "author": "성현교회 재정부",
