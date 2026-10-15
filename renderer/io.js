@@ -374,6 +374,12 @@ function staleList(P) {
   const out = [];
   for (const o of db.offerings.filter(o => o.ch === 'on')) for (const k of o.keys || []) if (gone(k)) { const a = (o.ka || {})[k] || {}; out.push({ type: '온라인 헌금', o, k, time: tOf(k), memo: k.split('|')[1] || '', who: (donorById(o.donorId) || {}).name || '', amount: Object.values(a).reduce((s, v) => s + v, 0) }); }
   for (const [list, type] of [[db.incomes, '기타수입'], [db.expenses, '지출'], [db.deposits, '현금입금']]) for (const x of list) if (x.key && gone(x.key)) out.push({ type, x, k: x.key, time: tOf(x.key), memo: x.memo || '', amount: x.amount });
+  // 거래일시 없는 지출(현금지출) — 총입출금 파일이면 그 파일의 주(Month) 범위 안에서 비교
+  if (P.bank) {
+    const ds = [...P.offerings.map(o => o.date), ...P.expenses.map(x => x.date), ...P.deposits.map(x => x.date)].filter(Boolean).sort();
+    const d0 = ds[0], d1 = ds[ds.length - 1];
+    for (const x of db.expenses) if (x.key && !tOf(x.key) && !x.time && x.date >= d0 && x.date <= d1 && !fk.has(x.key)) out.push({ type: '지출(현금)', x, k: x.key, time: x.date, memo: x.memo || '', amount: x.amount });
+  }
   return out.sort((a, b) => a.time.localeCompare(b.time));
 }
 function removeStale(L) {
