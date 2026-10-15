@@ -364,7 +364,27 @@ function importNewCounts(P) {
   return { on, inc, exp, dep, upd: onU + incU + expU + depU, del };
 }
 
+/** 엑셀에서 없어진 통장 거래: 파일이 담은 기간(거래일시) 안에 있는데 파일에는 없는 앱 기록 (엑셀에서 지우거나 바꾼 줄) */
+function staleList(P) {
+  const fk = new Set([...P.offerings.filter(o => o.ch === 'on').map(o => o.key), ...P.incomes.map(keyOf), ...P.expenses.map(keyOf), ...P.deposits.map(keyOf)].filter(Boolean));
+  const tOf = k => /^\d{4}-\d{2}-\d{2} \d/.test(k || '') ? k.split('|')[0] : '';
+  const ts = [...fk].map(tOf).filter(Boolean).sort(); if (!ts.length) return [];
+  const lo = ts[0], hi = ts[ts.length - 1], fl = new Set([...fk].map(looseKey).filter(Boolean));
+  const gone = k => { const t = tOf(k); return t && t >= lo && t <= hi && !fk.has(k) && !fl.has(looseKey(k)); };
+  const out = [];
+  for (const o of db.offerings.filter(o => o.ch === 'on')) for (const k of o.keys || []) if (gone(k)) { const a = (o.ka || {})[k] || {}; out.push({ type: '온라인 헌금', o, k, time: tOf(k), memo: k.split('|')[1] || '', who: (donorById(o.donorId) || {}).name || '', amount: Object.values(a).reduce((s, v) => s + v, 0) }); }
+  for (const [list, type] of [[db.incomes, '기타수입'], [db.expenses, '지출'], [db.deposits, '현금입금']]) for (const x of list) if (x.key && gone(x.key)) out.push({ type, x, k: x.key, time: tOf(x.key), memo: x.memo || '', amount: x.amount });
+  return out.sort((a, b) => a.time.localeCompare(b.time));
+}
+function removeStale(L) {
+  for (const s of L) {
+    if (s.o) { const o = s.o, a = (o.ka || {})[s.k] || {}; for (const [kk, v] of Object.entries(a)) { o.a[kk] = (o.a[kk] || 0) - v; if (o.a[kk] <= 0) delete o.a[kk]; } o.keys = o.keys.filter(x => x !== s.k); if (o.ka) delete o.ka[s.k]; if (!Object.keys(o.a).length) db.offerings = db.offerings.filter(x => x !== o); }
+    else for (const f of ['incomes', 'expenses', 'deposits']) db[f] = db[f].filter(x => x !== s.x);
+  }
+  if (L.length) logAct(`엑셀에서 없어진 거래 ${L.length}건 정리: ${L.slice(0, 5).map(s => `${s.time.slice(5, 10)} ${s.memo} ${won0(s.amount)}`).join(', ')}`);
+}
 function applyImport(P, dates, opt = {}) {
+  const stale = opt.removeStale === false ? [] : staleList(P);
   const res = { dates: 0, rows: 0, online: 0, newDonors: 0, donors: 0, incomes: 0, expenses: 0, deposits: 0, budgets: 0 };
   const before = db.donors.length;
   if (P.accounts && P.accounts.length && opt.accounts) {
@@ -437,6 +457,7 @@ function applyImport(P, dates, opt = {}) {
   };
   merge(db.incomes, P.incomes, 'incomes', true); merge(db.expenses, P.expenses, 'expenses', true); merge(db.deposits, P.deposits, 'deposits', false);
   for (const b of P.budgets) { (db.budgets[b.year] = db.budgets[b.year] || {})[b.hang] = b.amount; res.budgets++; }
+  removeStale(stale); res.removed = stale.length;
   if (P.bank && (!db.bank || P.bank.time >= db.bank.time)) {
     const old = db.bank || {}, B = { ...P.bank }, from = B.from || '', to = B.time;
     // 일부 기간만 올린 파일: 그 기간 밖의 검사 결과·시작 잔액은 예전 것 유지
