@@ -77,6 +77,13 @@ function migrate(d) {
   for (const k of ['accounts', 'donors', 'offerings', 'incomes', 'expenses', 'deposits', 'log']) d[k] = d[k] || b[k];
   for (const a of d.accounts) { a.kinds = a.kinds || (a.col ? [a.col] : []); a.mid = a.mid || ''; a.code = a.code || ''; a.note = a.note || ''; if (a.receipt == null) a.receipt = a.type === '수입' && !!a.kinds.length; }
   for (const o of d.offerings) o.ch = o.ch || 'off';
+  // v0.2.11: 거래일시 없는 입금 키에서 행 번호 제거 (날짜|내용|금액|종류|행 → 날짜|내용|금액|종류(#순번))
+  const oldNt = k => typeof k === 'string' && /^\d{4}-\d{2}-\d{2}\|/.test(k) && k.split('|').length === 5 && /^\d+$/.test(k.split('|')[4]);
+  const seen = new Map(), nk = k => { const b = k.split('|').slice(0, 4).join('|'), n = (seen.get(b) || 0) + 1; seen.set(b, n); return n > 1 ? b + '#' + n : b; };
+  const ntRows = [...d.incomes.filter(x => oldNt(x.key)).map(x => ({ k: x.key, set: v => { x.key = v; } })),
+    ...d.offerings.flatMap(o => (o.keys || []).filter(oldNt).map(k => ({ k, set: v => { o.keys = o.keys.map(z => z === k ? v : z); if (o.ka && o.ka[k]) { o.ka[v] = o.ka[k]; delete o.ka[k]; } } })))];
+  ntRows.sort((a, b) => +a.k.split('|')[4] - +b.k.split('|')[4]).forEach(r => r.set(nk(r.k)));
+  for (const x of d.deleted || []) if (oldNt(x.key)) x.key = x.key.split('|').slice(0, 4).join('|');
   d.budgets = d.budgets || {}; d.receipts = d.receipts || {}; d.deleted = d.deleted || [];
   if (!d.donors.some(x => x.anon)) d.donors.push(b.donors[0]);
   return d;

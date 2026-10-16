@@ -208,6 +208,7 @@ function reconDialog() {
   <tr><td>① 손에 있는 현금 <span class="muted">— 오프라인 헌금 − 현금입금 − 현금지출 (아래 주별)</span></td><td class="num">${sg(R.cash)}</td></tr>
   <tr><td>② 통장 잔액이 끊긴 곳 <span class="muted">— 총입출금에 빠졌거나 금액이 다른 통장 거래 (거래일시 빈 ‘온라인’ 줄 반영)</span></td><td class="num">${R.checks ? sg(R.chain) : '<span class="muted">총입출금 다시 올리면 검사</span>'}</td></tr>
   <tr><td>③ 전년 이월금 − 첫 거래 전 통장 잔액</td><td class="num">${R.hasOpen ? sg(R.open) : '<span class="muted">-</span>'}</td></tr>
+  ${R.odd.length ? `<tr><td>⑤ 통장 기록과 어긋나게 적힌 줄 <span class="muted">— 거래일시 없는 현금입금, 거래일시 있는데 비고 ‘오프라인’인 출금 (아래)</span></td><td class="num">${sg(R.oddSum)}</td></tr>` : ''}
   <tr class="tot"><td>④ 설명 안 되는 차이</td><td class="num ${R.rest ? 'exp' : ''}">${R.rest ? sg(R.rest) : '0 ✓'}</td></tr>
   </tbody></table>
   <div style="margin-top:10px">
@@ -218,7 +219,10 @@ function reconDialog() {
   ${R.checks && R.checks.length ? `<h3 style="margin:12px 0 4px">② 통장 잔액이 끊긴 곳 <span class="muted" style="font-weight:400">— 엑셀 행 번호 바로 위쪽을 은행 거래내역과 비교</span></h3>
   <table><thead><tr><th>엑셀 행</th><th>거래일시</th><th>내용</th><th class="num">통장 − 계산</th><th>의심</th></tr></thead><tbody>
   ${R.checks.map(c => `<tr><td>${c.row}</td><td class="muted">${esc(c.time.slice(5, 16).replace('-', '.'))}</td><td>${esc(c.memo)}</td><td class="num">${sg(c.gap)}</td><td>${c.by ? `<span class="pill">설명됨</span> ${c.by.row}행 ‘${esc(c.by.memo)}’ 거래일시 빈칸 — 거래일시를 넣으면 사라짐` : c.gap > 0 ? `입금 ${won0(c.gap)}원 빠짐 (또는 출금 과다 기록)` : `출금 ${won0(-c.gap)}원 빠짐 (또는 입금 중복·과다 기록)`}</td></tr>`).join('')}</tbody></table>` : ''}
-  ${R.noTime.filter(x => !x.hit).length ? `<p class="hint">거래일시 빈 ‘온라인’ 줄: ${R.noTime.filter(x => !x.hit).map(x => `${x.row}행 ${esc(x.memo)} ${won0(x.d)}`).join(', ')}</p>` : ''}
+  ${R.odd.length ? `<h3 style="margin:12px 0 4px">⑤ 통장 기록과 어긋나게 적힌 줄</h3>
+  <table><thead><tr><th>엑셀 행</th><th>주(Month)</th><th>내용</th><th class="num">금액</th><th>문제</th></tr></thead><tbody>
+  ${R.odd.map(x => `<tr><td>${x.row}</td><td>${dotDate(x.date)}</td><td>${esc(x.memo)}</td><td class="num">${sg(x.d)}</td><td>${esc(x.why)} — ${/현금입금/.test(x.why) ? '실제로 통장에 넣었으면 거래일시를 넣고, 안 넣었으면 현금입금 칸을 비우세요' : '통장 거래면 비고를 온라인으로, 현금이면 거래일시를 지우세요'}</td></tr>`).join('')}</tbody></table>` : ''}
+  ${R.noTime.filter(x => !x.hit).length ? `<p class="hint">거래일시 빈 ‘온라인’ 줄 — 맞는 통장 잔액 끊김이 없어 현금 거래일 수 있습니다(그렇다면 비고를 ‘오프라인’으로): ${R.noTime.filter(x => !x.hit).map(x => `${x.row}행 ${esc(x.memo)} ${won0(x.d)}`).join(', ')}</p>` : ''}
   </div>
   <div class="acts"><button class="btn pri" data-x>닫기</button></div>`, { wide: true });
   d.querySelector('[data-x]').onclick = closeModal;

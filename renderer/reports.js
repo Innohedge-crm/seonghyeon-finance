@@ -97,7 +97,8 @@ function reconData() {
   const chain = checks ? -checks.reduce((s, c) => s + c.gap, 0) + nt.reduce((s, x) => s + x.d, 0) : 0;
   // ③ 이월금 vs 첫 거래 전 통장 잔액
   const open = B.open != null ? full.carry - B.open : 0;
-  return { y, cut, book, bank: B.balance, time: B.time, diff, cash, weeks: wl.filter(o => o.r), checks, noTime: nt, chain, open, hasOpen: B.open != null, rest: diff - cash - chain - open };
+  const odd = (B.odd || []).filter(x => x.date <= cut), oddSum = odd.reduce((s, x) => s + x.d, 0);
+  return { y, cut, book, bank: B.balance, time: B.time, diff, cash, weeks: wl.filter(o => o.r), checks, noTime: nt, chain, open, hasOpen: B.open != null, odd, oddSum, rest: diff - cash - chain - open - oddSum };
 }
 const cashExpSum = date => cashExpList(date).reduce((s, x) => s + x.amount, 0);
 function weeklyXLSX(date, all) {

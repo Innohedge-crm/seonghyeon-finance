@@ -194,7 +194,8 @@ function parseLedger(rows, hi, sn, out) {
   for (const r of body) if (r[C.memo] && parseAmt(r[C.in]) && (String(r[C.ch] || '').trim() === '오프라인' || (!ymdTime(r[C.t]).t && String(r[C.ch] || '').trim() !== '온라인'))) known.add(String(r[C.memo]).replace(/\s/g, ''));
   known.delete('무명');
   const off = [], counts = { off: 0, on: 0, inc: 0, exp: 0, dep: 0, nokind: 0 };
-  let lastBal = null; const seen = new Map(), chain = [], noTime = [];
+  let lastBal = null; const seen = new Map(), chain = [], noTime = [], odd = [];
+  const ntKey = k => { const n = (seen.get(k) || 0) + 1; seen.set(k, n); return n > 1 ? k + '#' + n : k; };   // 거래일시 없는 입금: 행 번호 대신 순번 (줄을 끼워 넣어도 같은 키)
   body.forEach((r, i) => {
     const memo = r[C.memo] == null ? '' : String(r[C.memo]).trim();
     const { d: td, t: time } = ymdTime(r[C.t]);
@@ -205,6 +206,9 @@ function parseLedger(rows, hi, sn, out) {
     const ch = C.ch >= 0 ? String(r[C.ch] || '').trim() : '';
     if (C.bal >= 0 && typeof r[C.bal] === 'number' && time) lastBal = { balance: r[C.bal], time, week: wk || td };
     // 통장 거래(거래일시 있고 오프라인 아님) — 잔액 이어짐 검사용
+    // 통장 기록과 어긋나는 줄: 거래일시 없는 현금입금(통장에 들어간 기록 아님), 거래일시 있는데 비고 '오프라인'인 출금·현금입금(통장 검사에서 빠짐)
+    if (!time && cash && ch !== '온라인') odd.push({ row: hi + i + 2, date, memo, d: cash, why: '거래일시 없는 현금입금' });
+    if (time && ch === '오프라인' && (cash || parseAmt(r[C.out]))) odd.push({ row: hi + i + 2, date, memo, d: cash - parseAmt(r[C.out]), why: "거래일시 있는데 비고 '오프라인'" });
     if (!time && ch === '온라인' && (parseAmt(r[C.in]) || parseAmt(r[C.out]) || cash)) noTime.push({ row: hi + i + 2, date, memo, d: parseAmt(r[C.in]) + cash - parseAmt(r[C.out]) });
     if (time && ch !== '오프라인') chain.push({ row: hi + i + 2, time, memo, d: parseAmt(r[C.in]) + cash - parseAmt(r[C.out]), bal: C.bal >= 0 && typeof r[C.bal] === 'number' ? r[C.bal] : null });
     if (!date && (outAmt || inAmt || cash)) { out.warn.push(`${sn} ${hi + i + 2}행: 날짜(Month)가 없어 건너뜀 — ${memo}`); return; }
@@ -220,7 +224,7 @@ function parseLedger(rows, hi, sn, out) {
     const offline = ch === '오프라인' || (!time && ch !== '온라인');   // 거래일시 없는 줄 = 손으로 적은 오프라인 헌금
     // 오프라인(현금)은 종류와 상관없이 주일 헌금으로 — 주차·회비·찬조도 그 주일 현금 합계·현금입금 대조에 들어가야 함
     if (!offline && (!kind || (a && !a.receipt))) {   // 온라인: 헌금 아닌 수입 또는 종류 빈칸 → 기타수입
-      out.incomes.push({ date, time, kind, acc: '', amount: inAmt, memo, key: key || [date, memo, inAmt, kind, i].join('|') });
+      out.incomes.push({ date, time, kind, acc: '', amount: inAmt, memo, key: key || ntKey([date, memo, inAmt, kind].join('|')) });
       if (!kind) counts.nokind++; counts.inc++; return;
     }
     if (offline) {
@@ -229,7 +233,7 @@ function parseLedger(rows, hi, sn, out) {
       off.push({ date, name: nm, no: 0, a: { [kind || '미분류']: inAmt }, memo: '', note: '', ch: 'off' }); counts.off++;
     } else {
       const nm = donorNameFrom(memo, known) || '무명';
-      out.offerings.push({ date, name: nm, no: 0, a: { [kind]: inAmt }, memo: nm === '무명' || memo.replace(/\s/g, '') !== nm ? memo : '', note: '', ch: 'on', key: key || [date, memo, inAmt, kind, i].join('|') }); counts.on++;
+      out.offerings.push({ date, name: nm, no: 0, a: { [kind]: inAmt }, memo: nm === '무명' || memo.replace(/\s/g, '') !== nm ? memo : '', note: '', ch: 'on', key: key || ntKey([date, memo, inAmt, kind].join('|')) }); counts.on++;
     }
   });
   out.offerings.push(...off);
@@ -245,7 +249,8 @@ function parseLedger(rows, hi, sn, out) {
     out.bank.from = chain[0].time;
     const y0 = out.bank.time.slice(0, 4);   // 연초(전년 말~1월 초)부터 담긴 파일일 때만 이월 대조에 씀
     out.bank.fromYearStart = chain[0].time < `${y0}-01-15`;
-    out.bank.checks = checks; out.bank.noTime = noTime;
+    out.bank.checks = checks; out.bank.noTime = noTime; out.bank.odd = odd;
+    if (odd.length) out.warn.push(`통장 기록과 어긋나는 줄 ${odd.length}건: ${odd.map(x => `${x.row}행 ${x.memo} ${won0(x.d)} (${x.why})`).join(', ')}`);
     if (noTime.length) out.warn.push(`비고 '온라인'인데 거래일시가 빈 줄 ${noTime.length}건: ${noTime.map(x => `${x.row}행 ${x.memo} ${won0(x.d)}`).join(', ')} — 통장 거래라면 거래일시를 넣어 주세요.`);
     if (checks.length) out.warn.push(`통장 잔액이 이어지지 않는 곳 ${checks.length}군데 (총입출금에 빠지거나 금액이 다른 거래 의심): ${checks.map(c => `${c.row}행 ${c.time.slice(5, 10)} ${won0(c.gap)}원`).join(', ')}`);
   }
@@ -468,6 +473,7 @@ function applyImport(P, dates, opt = {}) {
     const old = db.bank || {}, B = { ...P.bank }, from = B.from || '', to = B.time;
     // 일부 기간만 올린 파일: 그 기간 밖의 검사 결과·시작 잔액은 예전 것 유지
     if (old.checks) B.checks = [...old.checks.filter(c => c.time < from || c.time > to), ...(B.checks || [])].sort((a, b) => a.time.localeCompare(b.time));
+    if (old.odd) B.odd = [...old.odd.filter(x => x.date < from.slice(0, 10) || x.date > to.slice(0, 10)), ...(B.odd || [])];
     if (old.noTime) B.noTime = [...old.noTime.filter(x => x.date < from.slice(0, 10) || x.date > to.slice(0, 10)), ...(B.noTime || [])];
     if (!B.fromYearStart) { B.open = old.open; }
     db.bank = B;
