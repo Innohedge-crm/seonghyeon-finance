@@ -384,6 +384,10 @@ function staleList(P) {
     const ds = [...P.offerings.map(o => o.date), ...P.expenses.map(x => x.date), ...P.deposits.map(x => x.date)].filter(Boolean).sort();
     const d0 = ds[0], d1 = ds[ds.length - 1];
     for (const x of db.expenses) if (x.key && !tOf(x.key) && !x.time && x.date >= d0 && x.date <= d1 && !fk.has(x.key)) out.push({ type: '지출(현금)', x, k: x.key, time: x.date, memo: x.memo || '', amount: x.amount });
+    // 거래일시 없는 입금(온라인 헌금·기타수입) — 예전 버전에서 줄을 끼워 넣으면 같은 입금이 두 번 들어간 경우 정리
+    const dk = k => /^\d{4}-\d{2}-\d{2}\|/.test(k || '') && !tOf(k) ? k.slice(0, 10) : '';
+    for (const x of db.incomes) { const d = dk(x.key); if (d && d >= d0 && d <= d1 && !fk.has(x.key)) out.push({ type: '기타수입', x, k: x.key, time: d, memo: x.memo || '', amount: x.amount }); }
+    for (const o of db.offerings.filter(o => o.ch === 'on')) for (const k of o.keys || []) { const d = dk(k); if (d && d >= d0 && d <= d1 && !fk.has(k)) { const a = (o.ka || {})[k] || {}; out.push({ type: '온라인 헌금', o, k, time: d, memo: k.split('|')[1] || '', who: (donorById(o.donorId) || {}).name || '', amount: Object.values(a).reduce((s, v) => s + v, 0) }); } }
   }
   return out.sort((a, b) => a.time.localeCompare(b.time));
 }
