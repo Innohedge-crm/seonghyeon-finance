@@ -84,7 +84,7 @@ function migrate(d) {
     ...d.offerings.flatMap(o => (o.keys || []).filter(oldNt).map(k => ({ k, set: v => { o.keys = o.keys.map(z => z === k ? v : z); if (o.ka && o.ka[k]) { o.ka[v] = o.ka[k]; delete o.ka[k]; } } })))];
   ntRows.sort((a, b) => +a.k.split('|')[4] - +b.k.split('|')[4]).forEach(r => r.set(nk(r.k)));
   for (const x of d.deleted || []) if (oldNt(x.key)) x.key = x.key.split('|').slice(0, 4).join('|');
-  d.budgets = d.budgets || {}; d.receipts = d.receipts || {}; d.deleted = d.deleted || [];
+  d.budgets = d.budgets || {}; d.receipts = d.receipts || {}; d.deleted = d.deleted || []; d.payreqs = d.payreqs || [];
   if (!d.donors.some(x => x.anon)) d.donors.push(b.donors[0]);
   return d;
 }

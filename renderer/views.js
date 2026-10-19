@@ -4,7 +4,7 @@ const thisYear = new Date().getFullYear();
 const S = { wx: [], view: 'home', year: thisYear, date: lastSunday(), q: qOf(today()), lt: 'exp', lm: '', la: '', dq: '', upd: '' };
 const NAV = [
   ['home', '현황'], ['week', '주일 헌금 입력'], ['weeks', '주일별 헌금'],
-  ['_', '재정'], ['ledger', '지출 · 기타수입'], ['budget', '예산 · 결산'], ['reports', '보고서 출력'],
+  ['_', '재정'], ['ledger', '지출 · 기타수입'], ['payreq', '송금 요청'], ['budget', '예산 · 결산'], ['reports', '보고서 출력'],
   ['_', '관리'], ['donors', '헌금자 명단'], ['import', '가져오기'], ['settings', '설정']
 ];
 function go(v, extra) { Object.assign(S, extra || {}); S.view = v; render(); window.scrollTo(0, 0); }
@@ -857,3 +857,68 @@ function showLock() {
     const f = $('#nav .foot span:last-child'); if (f) f.textContent = S.upd;
   });
 })();
+
+/* ======================= 송금 요청 (지출결의서) — 장부와 별도 ======================= */
+VIEWS.payreq = () => {
+  const y = S.year, L = db.payreqs.filter(x => yearOf(x.date) === y).sort((a, b) => b.date.localeCompare(a.date) || (b.no || '').localeCompare(a.no || ''));
+  const M = payMatches(db.payreqs), wait = L.filter(x => !M.get(x.id));
+  return `<div class="head"><div><h1>송금 요청 (지출결의서)</h1><p>${y}년 · ${L.length}건 · ${won0(L.reduce((s, x) => s + x.amount, 0))}원${wait.length ? ` · 통장 출금 미확인 ${wait.length}건 ${won0(wait.reduce((s, x) => s + x.amount, 0))}원` : ''}</p></div>
+  <div class="row">${yearSel('py', y)}<button class="btn" id="pxl">목록 Excel</button><button class="btn" id="ppdf" disabled>선택 PDF</button><button class="btn pri" id="pnew">새 송금 요청</button></div></div>
+  <p class="hint" style="margin-top:-8px">송금을 부탁할 때 쓰는 결의서입니다. <b>장부(지출·예결산)에는 들어가지 않습니다</b> — 실제 출금은 총입출금(통장)을 올릴 때 들어옵니다. 같은 금액의 통장 출금이 보이면 ‘통장 출금 확인’으로 표시합니다.</p>
+  <div class="tbl-wrap"><table><thead><tr><th><input type="checkbox" id="pall"></th><th>번호</th><th>요청일</th><th>계정</th><th>내용</th><th class="num">금액</th><th>받는 이</th><th>은행 · 계좌</th><th>통장</th></tr></thead><tbody>
+  ${L.map(x => { const e = M.get(x.id); return `<tr class="click" data-pid="${x.id}"><td><input type="checkbox" data-pc="${x.id}"></td><td class="muted">${esc(x.no || '')}</td><td>${dotDate(x.date)}</td><td>${esc(x.acc || '')}</td><td style="max-width:240px;overflow:hidden;text-overflow:ellipsis">${esc(x.memo || '')}</td><td class="num">${won0(x.amount)}</td><td>${esc(x.payee || '')}</td><td class="muted">${esc(x.bank || '')} ${esc(x.account || '')}</td><td>${e ? `<span class="pill" title="${esc(e.time + ' ' + (e.memo || ''))}">출금 확인 ${esc(e.time.slice(5, 10).replace('-', '.'))}</span>` : '<span class="pill warn">대기</span>'}</td></tr>`; }).join('') || '<tr><td colspan="9" class="empty">기록 없음 — ‘새 송금 요청’으로 만드세요</td></tr>'}
+  </tbody></table></div>`;
+};
+BIND.payreq = () => {
+  $('#py').onchange = e => go('payreq', { year: +e.target.value });
+  $('#pnew').onclick = () => payReqForm();
+  $$('[data-pid]').forEach(r => r.onclick = e => { if (e.target.matches('input')) return; payReqForm(db.payreqs.find(x => x.id === r.dataset.pid)); });
+  const sel = () => $$('[data-pc]').filter(c => c.checked).map(c => db.payreqs.find(x => x.id === c.dataset.pc));
+  const upd = () => { $('#ppdf').disabled = !sel().length; $('#ppdf').textContent = sel().length ? `선택 PDF (${sel().length})` : '선택 PDF'; };
+  $$('[data-pc]').forEach(c => c.onchange = upd);
+  $('#pall').onchange = e => { $$('[data-pc]').forEach(c => c.checked = e.target.checked); upd(); };
+  $('#ppdf').onclick = () => { const L = sel(); if (L.length) savePDF(`지출결의서_송금요청_${L.length > 1 ? L.length + '건' : L[0].no}.pdf`, payReqPDF(L)); };
+  $('#pxl').onclick = () => {
+    const y = S.year, L = db.payreqs.filter(x => yearOf(x.date) === y).sort((a, b) => a.date.localeCompare(b.date)), M = payMatches(db.payreqs);
+    const aoa = [['번호', '요청일', '계정', '내용', '금액', '받는 이', '은행', '계좌번호', '비고', '통장 출금'], ...L.map(x => { const e = M.get(x.id); return [x.no || '', x.date, x.acc || '', x.memo || '', x.amount, x.payee || '', x.bank || '', x.account || '', x.note || '', e ? e.time + ' ' + (e.memo || '') : '대기']; }),
+      ['합계', '', '', '', { f: `SUM(E2:E${L.length + 1})` }]];
+    saveXLSX(`송금요청_${y}.xlsx`, book([['송금요청', makeSheet(aoa, { widths: [10, 12, 18, 30, 13, 14, 12, 20, 18, 30] })]]));
+  };
+};
+function nextPayNo(date) { const y = date.slice(0, 4), n = db.payreqs.filter(x => (x.no || '').startsWith(y + '-')).map(x => +x.no.slice(5) || 0); return `${y}-${String((n.length ? Math.max(...n) : 0) + 1).padStart(3, '0')}`; }
+function payReqForm(x) {
+  const isNew = !x; x = x || { date: today(), acc: '', amount: 0, memo: '', payee: '', bank: '', account: '', note: '' };
+  const accs = db.accounts.filter(a => a.type === '지출');
+  const payees = [...new Map([...db.payreqs].sort((a, b) => a.date.localeCompare(b.date)).filter(p => p.payee).map(p => [p.payee, p])).values()];
+  const d = modal(`<h2>${isNew ? '새 송금 요청' : '송금 요청 ' + esc(x.no || '')}</h2>
+  <p class="muted" style="margin-top:-6px">장부에는 들어가지 않습니다. 실제 출금은 통장 거래내역(총입출금)으로 들어옵니다.</p>
+  <div class="fgrid">
+    <label class="f">요청일<input type="date" id="qd" value="${x.date}"></label>
+    <label class="f">계정<select id="qa"><option value="">(고르세요)</option>${accs.map(a => `<option value="${esc(a.hang)}" ${a.hang === x.acc ? 'selected' : ''}>${esc(accLabel(a))}</option>`).join('')}</select></label>
+    <label class="f">금액<input type="text" inputmode="numeric" id="qm" value="${x.amount ? won0(x.amount) : ''}"></label>
+  </div>
+  <label class="f" style="margin-top:12px">내용<textarea id="qn" rows="3" style="width:100%">${esc(x.memo || '')}</textarea></label>
+  <div class="fgrid" style="margin-top:12px">
+    <label class="f">받는 이<input type="text" id="qp" list="qpl" value="${esc(x.payee || '')}" placeholder="예: 최태환"><datalist id="qpl">${payees.map(p => `<option value="${esc(p.payee)}">`).join('')}</datalist></label>
+    <label class="f">은행<input type="text" id="qb" value="${esc(x.bank || '')}" placeholder="예: 국민은행"></label>
+    <label class="f">계좌번호<input type="text" id="qc" value="${esc(x.account || '')}" placeholder="예: 123-45-678901"></label>
+  </div>
+  <label class="f" style="margin-top:12px">비고<input type="text" id="qo" value="${esc(x.note || '')}"></label>
+  <p class="hint" id="qh"></p>
+  <div class="acts">${isNew ? '' : '<button class="btn danger" data-del style="margin-right:auto">삭제</button>'}<button class="btn" data-x>취소</button><button class="btn" data-pdf>저장 후 PDF</button><button class="btn pri" data-ok>저장</button></div>`);
+  const hint = () => { const v = parseAmt($('#qm', d).value); $('#qh', d).textContent = v > 1000000 ? '100만원 초과 — 결의서에 운영위원회 회장 승인란이 들어갑니다 (정관 제44조).' : ''; };
+  $('#qm', d).oninput = hint; hint();
+  $('#qp', d).onchange = () => { const p = payees.find(p => p.payee === $('#qp', d).value.trim()); if (p) { if (!$('#qb', d).value) $('#qb', d).value = p.bank || ''; if (!$('#qc', d).value) $('#qc', d).value = p.account || ''; } };
+  const saveIt = () => {
+    const v = { date: $('#qd', d).value, acc: $('#qa', d).value, amount: parseAmt($('#qm', d).value), memo: $('#qn', d).value.trim(), payee: $('#qp', d).value.trim(), bank: $('#qb', d).value.trim(), account: $('#qc', d).value.trim(), note: $('#qo', d).value.trim() };
+    if (!v.date || !v.amount || !v.payee) { toast('요청일·금액·받는 이를 입력하세요'); return null; }
+    if (isNew) { x = { id: uid(), no: nextPayNo(v.date), ...v, t: now() }; db.payreqs.push(x); logAct(`송금 요청 ${x.no}: ${v.payee} ${won0(v.amount)}`); }
+    else Object.assign(x, v, { t: now() });
+    save(); return x;
+  };
+  d.querySelector('[data-x]').onclick = closeModal;
+  d.querySelector('[data-ok]').onclick = () => { if (saveIt()) { closeModal(); go('payreq', { year: yearOf(x.date) }); } };
+  d.querySelector('[data-pdf]').onclick = async () => { const r = saveIt(); if (!r) return; closeModal(); go('payreq', { year: yearOf(r.date) }); await savePDF(`지출결의서_송금요청_${r.no}.pdf`, payReqPDF([r])); };
+  const del = d.querySelector('[data-del]');
+  if (del) del.onclick = async () => { if (await confirmBox(`송금 요청 ${x.no} (${x.payee} ${won0(x.amount)}원)을 삭제할까요?`, '삭제', true)) { db.payreqs = db.payreqs.filter(z => z !== x); save(); closeModal(); render(); } };
+}
