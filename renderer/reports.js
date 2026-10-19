@@ -467,6 +467,22 @@ function payReqPDF(list) {
     <p class="right" style="margin-top:12mm">${dotDate(x.date)} &nbsp; ${esc(ch.name)} 재정부</p></div>`; };
   return docHTML('지출결의서(송금요청)', list.map(page).join(''), { fs: 11, css: '.kvt th{width:26mm;background:#f1f3f6}.kvt td{padding:7px 9px}.page+.page{page-break-before:always}' });
 }
+/** 여러 건을 한 장의 지출결의서로 (송금 목록) */
+function payReqListPDF(list) {
+  const ch = db.settings.church, L = [...list].sort((a, b) => a.date.localeCompare(b.date) || (a.no || '').localeCompare(b.no || ''));
+  const total = L.reduce((s, x) => s + x.amount, 0), big = L.some(x => x.amount > 1000000);
+  const d0 = L[0].date, d1 = L[L.length - 1].date, today0 = today();
+  const body = `<h1>지 출 결 의 서 <span style="font-size:11pt;font-weight:400">(송금 요청 ${L.length}건)</span></h1>
+  <table style="width:${big ? 44 : 30}%;margin-left:auto;margin-bottom:5mm"><tr><th>담 당</th><th>재정부장</th>${big ? '<th>운영위원회 회장</th>' : ''}</tr><tr style="height:17mm"><td></td><td></td>${big ? '<td></td>' : ''}</tr></table>
+  <table class="kvt" style="margin-bottom:4mm"><tr><th>작성일</th><td>${dotDate(today0)}</td><th>요청 기간</th><td>${dotDate(d0)}${d1 !== d0 ? ' ~ ' + dotDate(d1) : ''}</td><th>합계 금액</th><td style="font-size:13pt;font-weight:700">₩ ${won0(total)}</td></tr>
+  <tr><th>금액(한글)</th><td colspan="5">금 ${numKor(total)}원정</td></tr></table>
+  <table class="lst"><thead><tr><th style="width:8mm">순</th><th style="width:20mm">번호</th><th style="width:24mm">요청일</th><th style="width:40mm">계정</th><th>내용</th><th style="width:26mm">받는 이</th><th style="width:22mm">은행</th><th style="width:40mm">계좌번호</th><th style="width:28mm">금액</th></tr></thead><tbody>
+  ${L.map((x, i) => { const a = accByHang(x.acc) || {}; return `<tr><td class="c">${i + 1}</td><td class="c">${esc(x.no || '')}</td><td class="c" style="white-space:nowrap">${dotDate(x.date)}</td><td>${esc(a.code ? a.code + '. ' : '')}${esc(x.acc || '')}</td><td>${esc(x.memo || '')}${x.note ? `<br><span style="color:#555;font-size:8.5pt">${esc(x.note)}</span>` : ''}</td><td><b>${esc(x.payee || '')}</b></td><td>${esc(x.bank || '')}</td><td style="letter-spacing:.02em"><b>${esc(x.account || '')}</b></td><td class="n">${won0(x.amount)}</td></tr>`; }).join('')}
+  </tbody><tfoot><tr class="tot"><td colspan="8" class="c">합 계 (${L.length}건)</td><td class="n">${won0(total)}</td></tr></tfoot></table>
+  <p class="note">※ 정관 제44조: 재정은 재정부장의 결재와 운영위원회 회장의 승인으로 지출하며, 예산 범위 내 통상적 일정금액과 100만원 이하는 재정부장 전결로 지출할 수 있습니다.${big ? ' 100만원 초과 건 포함 — 운영위원회 회장 승인 필요.' : ''}</p>
+  <p class="right" style="margin-top:8mm">${dotDate(today0)} &nbsp; ${esc(ch.name)} 재정부</p>`;
+  return docHTML('지출결의서(송금요청)', body, { fs: 10, landscape: true, css: '.kvt th{width:24mm;background:#f1f3f6}.kvt td{padding:5px 8px}.lst td{padding:6px 6px;vertical-align:middle}.lst thead{display:table-header-group}.lst tr{page-break-inside:avoid}' });
+}
 /** 금액 한글 표기 (예: 1,200,000 → 일백이십만) */
 function numKor(n) {
   const d = '영일이삼사오육칠팔구', u = ['', '십', '백', '천'], big = ['', '만', '억', '조']; n = Math.round(n || 0); if (!n) return '영';

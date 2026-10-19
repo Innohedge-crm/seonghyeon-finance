@@ -864,7 +864,7 @@ VIEWS.payreq = () => {
   const M = payMatches(db.payreqs), wait = L.filter(x => !M.get(x.id));
   return `<div class="head"><div><h1>송금 요청 (지출결의서)</h1><p>${y}년 · ${L.length}건 · ${won0(L.reduce((s, x) => s + x.amount, 0))}원${wait.length ? ` · 통장 출금 미확인 ${wait.length}건 ${won0(wait.reduce((s, x) => s + x.amount, 0))}원` : ''}</p></div>
   <div class="row">${yearSel('py', y)}<button class="btn" id="pxl">목록 Excel</button><button class="btn" id="ppdf" disabled>선택 PDF</button><button class="btn pri" id="pnew">새 송금 요청</button></div></div>
-  <p class="hint" style="margin-top:-8px">송금을 부탁할 때 쓰는 결의서입니다. <b>장부(지출·예결산)에는 들어가지 않습니다</b> — 실제 출금은 총입출금(통장)을 올릴 때 들어옵니다. 같은 금액의 통장 출금이 보이면 ‘통장 출금 확인’으로 표시합니다.</p>
+  <p class="hint" style="margin-top:-8px">송금을 부탁할 때 쓰는 결의서입니다. <b>장부(지출·예결산)에는 들어가지 않습니다</b> — 실제 출금은 총입출금(통장)을 올릴 때 들어옵니다. 같은 금액의 통장 출금이 보이면 ‘통장 출금 확인’으로 표시합니다. 여러 건을 체크하면 지출결의서 한 장(목록)으로 나옵니다.</p>
   <div class="tbl-wrap"><table><thead><tr><th><input type="checkbox" id="pall"></th><th>번호</th><th>요청일</th><th>계정</th><th>내용</th><th class="num">금액</th><th>받는 이</th><th>은행 · 계좌</th><th>통장</th></tr></thead><tbody>
   ${L.map(x => { const e = M.get(x.id); return `<tr class="click" data-pid="${x.id}"><td><input type="checkbox" data-pc="${x.id}"></td><td class="muted">${esc(x.no || '')}</td><td>${dotDate(x.date)}</td><td>${esc(x.acc || '')}</td><td style="max-width:240px;overflow:hidden;text-overflow:ellipsis">${esc(x.memo || '')}</td><td class="num">${won0(x.amount)}</td><td>${esc(x.payee || '')}</td><td class="muted">${esc(x.bank || '')} ${esc(x.account || '')}</td><td>${e ? `<span class="pill" title="${esc(e.time + ' ' + (e.memo || ''))}">출금 확인 ${esc(e.time.slice(5, 10).replace('-', '.'))}</span>` : '<span class="pill warn">대기</span>'}</td></tr>`; }).join('') || '<tr><td colspan="9" class="empty">기록 없음 — ‘새 송금 요청’으로 만드세요</td></tr>'}
   </tbody></table></div>`;
@@ -874,10 +874,10 @@ BIND.payreq = () => {
   $('#pnew').onclick = () => payReqForm();
   $$('[data-pid]').forEach(r => r.onclick = e => { if (e.target.matches('input')) return; payReqForm(db.payreqs.find(x => x.id === r.dataset.pid)); });
   const sel = () => $$('[data-pc]').filter(c => c.checked).map(c => db.payreqs.find(x => x.id === c.dataset.pc));
-  const upd = () => { $('#ppdf').disabled = !sel().length; $('#ppdf').textContent = sel().length ? `선택 PDF (${sel().length})` : '선택 PDF'; };
+  const upd = () => { const n = sel().length; $('#ppdf').disabled = !n; $('#ppdf').textContent = n > 1 ? `결의서 PDF (${n}건 한 장)` : n ? '결의서 PDF' : '선택 PDF'; };
   $$('[data-pc]').forEach(c => c.onchange = upd);
   $('#pall').onchange = e => { $$('[data-pc]').forEach(c => c.checked = e.target.checked); upd(); };
-  $('#ppdf').onclick = () => { const L = sel(); if (L.length) savePDF(`지출결의서_송금요청_${L.length > 1 ? L.length + '건' : L[0].no}.pdf`, payReqPDF(L)); };
+  $('#ppdf').onclick = () => { const L = sel(); if (!L.length) return; if (L.length === 1) savePDF(`지출결의서_송금요청_${L[0].no}.pdf`, payReqPDF(L)); else savePDF(`지출결의서_송금요청_${today()}_${L.length}건.pdf`, payReqListPDF(L), { landscape: true }); };
   $('#pxl').onclick = () => {
     const y = S.year, L = db.payreqs.filter(x => yearOf(x.date) === y).sort((a, b) => a.date.localeCompare(b.date)), M = payMatches(db.payreqs);
     const aoa = [['번호', '요청일', '계정', '내용', '금액', '받는 이', '은행', '계좌번호', '비고', '통장 출금'], ...L.map(x => { const e = M.get(x.id); return [x.no || '', x.date, x.acc || '', x.memo || '', x.amount, x.payee || '', x.bank || '', x.account || '', x.note || '', e ? e.time + ' ' + (e.memo || '') : '대기']; }),
