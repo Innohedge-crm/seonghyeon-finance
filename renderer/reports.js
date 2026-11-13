@@ -492,3 +492,26 @@ function numKor(n) {
     g++; }
   return out;
 }
+
+/* ======================= 운영위 주간 보고: 감사·기도제목 (금액 없음) ======================= */
+function careReportData(d) {
+  const on = offeringsOn(d).filter(o => rowTotal(o) && !(donorById(o.donorId) || {}).anon);
+  const ids = ch => new Set(on.filter(o => !ch || o.ch === ch).map(o => o.donorId));
+  const firstOf = new Map(); for (const o of db.offerings) if (rowTotal(o)) { const f = firstOf.get(o.donorId); if (!f || o.date < f) firstOf.set(o.donorId, o.date); }
+  const firsts = [...ids()].filter(id => firstOf.get(id) === d).map(donorById).filter(Boolean).sort(donorCmp);
+  const items = db.care.filter(n => n.date === d && n.text && n.report !== false).map(n => { const dn = donorById(n.donorId) || {}; return { name: dn.name || '', title: dn.title || '', kind: n.kind || '', text: n.text, dn }; })
+    .sort((a, b) => donorCmp(a.dn, b.dn));
+  return { nAll: ids().size, nOff: ids('off').size, nOn: ids('on').size, firsts, items };
+}
+function careReportPDF(d) {
+  const R = careReportData(d), ch = db.settings.church;
+  const body = `<h1>감사 · 기도제목 보고</h1><p class="sub" style="text-align:center">${korDate(d)} 주일 · ${esc(ch.name)} 운영위원회</p>
+  <table class="kvt" style="margin:5mm 0"><tr><th>헌금 참여</th><td>${R.nAll}명 (오프라인 ${R.nOff}명 · 온라인 ${R.nOn}명)</td><th>처음 헌금</th><td>${R.firsts.length ? R.firsts.map(x => esc(x.name) + (x.title ? ' ' + esc(x.title) : '')).join(', ') : '-'}</td></tr></table>
+  <h2>감사 · 기도제목 (${R.items.length}건)</h2>
+  <table class="lst"><thead><tr><th style="width:13mm">번호</th><th style="width:34mm">이름</th><th style="width:24mm">구분</th><th>내용</th></tr></thead><tbody>
+  ${R.items.map((x, i) => `<tr><td class="c">${i + 1}</td><td><b>${esc(x.name)}</b>${x.title ? ' ' + esc(x.title) : ''}</td><td class="c">${esc(x.kind)}</td><td style="white-space:pre-wrap">${esc(x.text)}</td></tr>`).join('') || '<tr><td colspan="4" class="c">기록 없음</td></tr>'}
+  </tbody></table>
+  <p class="note">※ 헌금 금액은 기재하지 않습니다. ‘목회자만’으로 표시한 기도제목은 이 보고서에서 제외했습니다.</p>
+  <p class="right" style="margin-top:8mm">${esc(ch.name)} 재정부장 ${esc(ch.treasurer || '')}</p>`;
+  return docHTML(`감사·기도제목 보고 ${d}`, body, { fs: 10.5, css: '.kvt th{width:24mm;background:#f1f3f6}.kvt td{padding:6px 8px}.lst td{padding:7px 8px;vertical-align:top}.lst thead{display:table-header-group}.lst tr{page-break-inside:avoid}' });
+}
