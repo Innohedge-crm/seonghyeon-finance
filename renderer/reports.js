@@ -506,7 +506,7 @@ function careReportData(d) {
 function careReportPDF(d) {
   const R = careReportData(d), ch = db.settings.church;
   const body = `<h1>감사 · 기도제목 보고</h1><p class="sub" style="text-align:center">${korDate(d)} 주일 · ${esc(ch.name)} 운영위원회</p>
-  <table class="kvt" style="margin:5mm 0"><tr><th>헌금 참여</th><td>${R.nAll}명 (오프라인 ${R.nOff}명 · 온라인 ${R.nOn}명)</td><th>처음 헌금</th><td>${R.firsts.length ? R.firsts.map(x => esc(x.name) + (x.title ? ' ' + esc(x.title) : '')).join(', ') : '-'}</td></tr></table>
+  <table class="kvt" style="margin:5mm 0"><tr><th>헌금 참여</th><td>${R.nAll}명</td><th>처음 헌금</th><td>${R.firsts.length ? R.firsts.map(x => esc(x.name) + (x.title ? ' ' + esc(x.title) : '')).join(', ') : '-'}</td></tr></table>
   <h2>감사 · 기도제목 (${R.items.length}건)</h2>
   <table class="lst"><thead><tr><th style="width:13mm">번호</th><th style="width:34mm">이름</th><th style="width:24mm">구분</th><th>내용</th></tr></thead><tbody>
   ${R.items.map((x, i) => `<tr><td class="c">${i + 1}</td><td><b>${esc(x.name)}</b>${x.title ? ' ' + esc(x.title) : ''}</td><td class="c">${esc(x.kind)}</td><td style="white-space:pre-wrap">${esc(x.text)}</td></tr>`).join('') || '<tr><td colspan="4" class="c">기록 없음</td></tr>'}

@@ -930,7 +930,7 @@ const careLatest = () => { const ds = offeringDates(); return ds.length ? ds[ds.
 VIEWS.care = () => {
   S.ct = S.ct || 'grid';
   const tabs = `<div class="seg"><button data-ct="grid" aria-pressed="${S.ct === 'grid'}">주일별 헌금생활</button><button data-ct="notes" aria-pressed="${S.ct === 'notes'}">감사 · 기도제목</button></div>`;
-  return `<div class="head"><div><h1>성도 헌금생활</h1><p>헌금을 한 번이라도 드린 분 기준 · <b>금액은 표시하지 않습니다</b></p></div><div class="row">${tabs}</div></div>` + (S.ct === 'grid' ? careGrid() : careNotes());
+  return `<div class="head"><div><h1>성도 헌금생활</h1><p>헌금을 한 번이라도 드린 분 기준 · 온라인·오프라인 구분 없이 헌금 여부만 · <b>금액은 표시하지 않습니다</b></p></div><div class="row">${tabs}</div></div>` + (S.ct === 'grid' ? careGrid() : careNotes());
 };
 function careGrid() {
   const W = S.cw || 13, end = S.cend || careLatest();
@@ -938,17 +938,18 @@ function careGrid() {
   const G = careGiven(), dists = [...new Set([...G.values()].map(e => e.d.district || '').filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
   const rows = [...G.values()].filter(e => !e.d.inactive && e.first <= end).sort((a, b) => donorCmp(a.d, b.d));
   const gap = e => { const last = [...e.dates.keys()].filter(x => x <= end).sort().pop(); return last ? Math.round((parseISO(end) - parseISO(last)) / 6048e5) : null; };
-  const mark = v => !v ? '' : v.includes('off') && v.includes('on') ? '●○' : v.includes('on') ? '○' : '●';
-  const nOff = w => rows.filter(e => (e.dates.get(w) || '').includes('off')).length, nOn = w => rows.filter(e => (e.dates.get(w) || '').includes('on')).length, nAll = w => rows.filter(e => e.dates.has(w)).length;
+  const mark = v => v ? '●' : '';
+  const nAll = w => rows.filter(e => e.dates.has(w)).length;
+  S._care = { weeks, rows, gap, end };
   return `<div class="toolbar"><input type="search" id="cq" placeholder="이름 검색 (초성 가능)">
   <select id="cdist"><option value="">전체 구역</option>${dists.map(x => `<option ${S.cdist === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>
   <select id="cw">${[8, 13, 26, 52].map(n => `<option value="${n}" ${n === W ? 'selected' : ''}>최근 ${n}주</option>`).join('')}</select>
   <label class="f" style="flex-direction:row;align-items:center;gap:6px">기준 주일<input type="date" id="cend" value="${end}"></label>
   <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="c4" ${S.c4 ? 'checked' : ''}> 4주 이상 쉬는 분만</label>
-  <span class="hint">● 오프라인 · ○ 온라인 · ●○ 둘 다</span></div>
+  <span class="hint">● 헌금함 (온라인·오프라인 구분 없음)</span><button class="btn" id="cxl" style="margin-left:auto">Excel 저장</button></div>
   <div class="tbl-wrap"><table class="care"><thead><tr><th>이름</th><th>직분</th><th>구역</th>${weeks.map(w => `<th class="c" style="font-size:11px">${+w.slice(5, 7)}/${+w.slice(8)}</th>`).join('')}<th>최근 헌금</th><th class="num">쉼</th></tr></thead><tbody>
   ${rows.map(e => { const g = gap(e); return `<tr data-nm="${esc(e.d.name)}" data-dist="${esc(e.d.district || '')}" data-g4="${g >= 4 ? 1 : 0}"><td><b>${esc(e.d.name)}</b>${e.first >= weeks[0] ? ' <span class="pill" title="이 기간에 처음 헌금">새로</span>' : ''}</td><td>${esc(e.d.title || '')}</td><td class="muted">${esc(e.d.district || '')}</td>${weeks.map(w => `<td class="c">${mark(e.dates.get(w))}</td>`).join('')}<td class="muted">${g === null ? '' : dotDate([...e.dates.keys()].filter(x => x <= end).sort().pop())}</td><td class="num">${g ? (g >= 4 ? `<span class="pill warn">${g}주</span>` : g + '주') : ''}</td></tr>`; }).join('') || `<tr><td colspan="${weeks.length + 5}" class="empty">헌금 기록이 없습니다</td></tr>`}
-  </tbody><tfoot><tr class="tot"><td colspan="3">참여 인원 (오프라인/온라인)</td>${weeks.map(w => `<td class="c" style="font-size:11px">${nAll(w) || ''}${nAll(w) ? `<br><span class="muted">${nOff(w)}/${nOn(w)}</span>` : ''}</td>`).join('')}<td colspan="2"></td></tr></tfoot></table></div>
+  </tbody><tfoot><tr class="tot"><td colspan="3">참여 인원</td>${weeks.map(w => `<td class="c" style="font-size:12px">${nAll(w) || ''}</td>`).join('')}<td colspan="2"></td></tr></tfoot></table></div>
   <p class="hint">명단: 헌금을 한 번이라도 드린 분(무명·숨김 제외). ‘쉼’은 기준 주일까지 마지막 헌금 후 지난 주 수. 출석은 출석부 앱에서 확인하세요.</p>`;
 }
 function careNotes() {
@@ -982,6 +983,17 @@ BIND.care = () => {
     $('#cq').oninput = apply; $('#cdist').onchange = () => { S.cdist = $('#cdist').value; apply(); }; $('#c4').onchange = () => { S.c4 = $('#c4').checked; apply(); };
     $('#cw').onchange = e => go('care', { cw: +e.target.value });
     $('#cend').onchange = e => { const v = e.target.value; if (v) go('care', { cend: isSunday(v) ? v : lastSunday(v) }); };
+    $('#cxl').onclick = () => {
+      const { weeks, rows, gap, end } = S._care, vis = new Set($$('tr[data-nm]').filter(tr => !tr.hidden).map(tr => tr.dataset.nm));
+      const L = rows.filter(e => vis.has(e.d.name)), C = 4 + weeks.length;   // 이름·직분·구역 다음 주일 열
+      const last = e => [...e.dates.keys()].filter(x => x <= end).sort().pop() || '';
+      const head = ['이름', '직분', '구역', ...weeks.map(w => `${+w.slice(5, 7)}/${+w.slice(8)}`), '헌금 주 수', '최근 헌금', '쉼(주)'];
+      const body = L.map((e, i) => { const r = i + 4, g = gap(e); return [e.d.name, e.d.title || '', e.d.district || '', ...weeks.map(w => e.dates.has(w) ? '●' : ''), { f: `COUNTIF(D${r}:${CL(C - 2)}${r},"●")` }, last(e), g === null ? '' : g]; });
+      const n = L.length, foot = ['참여 인원', '', '', ...weeks.map((_, j) => ({ f: `COUNTIF(${CL(3 + j)}4:${CL(3 + j)}${n + 3},"●")` })), '', '', ''];
+      const aoa = [[`성도 헌금생활 — ${dotDate(weeks[0])} ~ ${dotDate(weeks[weeks.length - 1])} (${weeks.length}주, 금액 없음)`], [], head, ...body, foot];
+      const ws = makeSheet(aoa, { widths: [10, 8, 9, ...weeks.map(() => 5.5), 9, 12, 7], plainCols: [0, 1, 2] });
+      saveXLSX(`성도헌금생활_${end}_${weeks.length}주.xlsx`, book([['헌금생활', ws]]));
+    };
     apply(); return;
   }
   const d = S.cd || careLatest();
@@ -1001,6 +1013,6 @@ BIND.care = () => {
     render(); };
   $('#crp').onclick = () => { document.activeElement && document.activeElement.blur(); savePDF(`운영위보고_감사기도제목_${d}.pdf`, careReportPDF(d)); };
   $('#crx').onclick = () => { const R = careReportData(d);
-    const aoa = [[`${korDate(d)} 감사·기도제목 보고`], [], ['헌금 참여 인원', R.nAll, '오프라인', R.nOff, '온라인', R.nOn], ['처음 헌금하신 분', R.firsts.map(x => x.name).join(', ')], [], ['번호', '이름', '직분', '구분', '내용'], ...R.items.map((x, i) => [i + 1, x.name, x.title, x.kind, x.text])];
+    const aoa = [[`${korDate(d)} 감사·기도제목 보고`], [], ['헌금 참여 인원', R.nAll], ['처음 헌금하신 분', R.firsts.map(x => x.name).join(', ')], [], ['번호', '이름', '직분', '구분', '내용'], ...R.items.map((x, i) => [i + 1, x.name, x.title, x.kind, x.text])];
     saveXLSX(`운영위보고_감사기도제목_${d}.xlsx`, book([['보고', makeSheet(aoa, { widths: [8, 12, 10, 14, 70], plainCols: [0, 1, 3, 5] })]])); };
 };
